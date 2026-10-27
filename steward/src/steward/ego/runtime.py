@@ -63,10 +63,10 @@ class RobotLink:
     def camera_png(self, width: int = 320, height: int = 240) -> bytes:
         return call("GET", f"{self.url}/camera/rgb?width={width}&height={height}")
 
-    def wait_until(self, t: float | None = None, hold: str | None = None, rank: int = 0) -> float:
+    def wait_until(self, t: float | None = None, hold: str | None = None, rank: int = 0, pulls: bool = True) -> float:
         """Wait until the world clock reaches ``t`` (``None``: now) and, with ``hold``, the world lets
         this control loop or input run (:meth:`WorldSim.wait_until`); return the world time then."""
-        body = {"hold": hold, "rank": rank, **({} if t is None else {"until": t})}
+        body = {"hold": hold, "rank": rank, "pulls": pulls, **({} if t is None else {"until": t})}
         while True:
             try:
                 return call("POST", f"{self.url}/clock/wait", body)["t"]
@@ -74,11 +74,11 @@ class RobotLink:
                 if exc.status != 504 or self.closed:
                     raise
 
-    def arm(self, hold: str, t: float | None = None, rank: int = 0) -> None:
+    def arm(self, hold: str, t: float | None = None, rank: int = 0, pulls: bool = True) -> None:
         """Register ``hold`` at world time ``t`` (``None``: now) without waiting, so the world stops for
         it before its owner first waits."""
         try:
-            call("POST", f"{self.url}/clock/wait", {"hold": hold, "rank": rank, "timeoutS": 0.0,
+            call("POST", f"{self.url}/clock/wait", {"hold": hold, "rank": rank, "pulls": pulls, "timeoutS": 0.0,
                                                      **({} if t is None else {"until": t})})
         except HttpError as exc:
             if exc.status != 504:
@@ -132,7 +132,7 @@ class EgoRuntime:
         """Start perception in a worker thread. The first frame is taken there too: RGB-D frames
         are rendered on the world's main thread, which may be the caller."""
         self._running = True
-        self.link.arm("perception")
+        self.link.arm("perception", pulls=False)
         self._thread = threading.Thread(target=self._loop, name="ego-perception", daemon=True)
         self._thread.start()
         self.view.start()
@@ -203,14 +203,14 @@ class EgoRuntime:
 
     def _loop(self) -> None:
         """Perceive every ``1 / perception_hz`` seconds of world time, from the time the runtime started;
-        the world waits for each update."""
+        the world waits for each update but does not step for it alone (``freeze_idle``)."""
         period = 1.0 / self.config.perception_hz
         telemetry_every = max(1, int(self.config.perception_hz / self.config.telemetry_hz))
         k = 0
         t: float | None = None
         while self._running:
             try:
-                t = self.link.wait_until(None if t is None else t + period, "perception")
+                t = self.link.wait_until(None if t is None else t + period, "perception", pulls=False)
             except (HttpError, OSError) as exc:
                 self.last_error = f"robot port unavailable: {exc}"
                 time.sleep(period)

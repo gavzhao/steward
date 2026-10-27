@@ -107,6 +107,7 @@ class _Hold:
     """A robot control loop or client input the world clock waits for (see :meth:`WorldSim.wait_until`)."""
     step: int  # index of the world step it wakes at
     rank: int
+    pulls: bool = True  # with ``freeze_idle``, a waiting hold that pulls lets the world step towards it
     woken: bool = False
     seen: float = field(default_factory=time.monotonic)  # wall time its owner last waited or woke
 
@@ -124,10 +125,14 @@ class _RobotState:
 class WorldSim:
     def __init__(self, scene: dict, *, timestep: float = 0.002, speed: float = 1.0, seed: int = 0,
                  perception: PerceptionConfig | None = None, grasp: GraspConfig | None = None,
-                 overview_camera: dict | None = None):
+                 overview_camera: dict | None = None, freeze_idle: bool = False):
         self._initial_scene = copy.deepcopy(scene)
         self.timestep = timestep
         self.speed = speed
+        # The world stands still while no one waits for world time to pass: no robot acts and no
+        # client sleeps, e.g. while the agents think.
+        self.freeze_idle = freeze_idle
+        self._pulling_waits = 0  # callers of wait_until without a hold, waiting for a later step
         # Steps per locked batch when the loop is behind: short batches keep robot commands within
         # 50 ms of simulated time even when the physics cannot keep up with the requested speed.
         self.max_batch = 25
@@ -409,12 +414,13 @@ class WorldSim:
         while self._running:
             with self._clock:
                 now, epoch = self.time, self._epoch
-                if self.paused or self.speed != speed0 or epoch != epoch0:
+                idle = self.freeze_idle and not self._pulled()
+                if self.paused or idle or self.speed != speed0 or epoch != epoch0:
                     wall0, sim0, speed0, epoch0 = time.perf_counter(), now, self.speed, epoch
                 n = min(self.max_batch, self._hold_limit() - self._step_now())
                 if speed0 != math.inf:
                     n = min(n, self._step_index(sim0 + (time.perf_counter() - wall0) * speed0) - self._step_now())
-                if self.paused or n <= 0:
+                if self.paused or idle or n <= 0:
                     self._clock.wait(0.01 if self.paused else 0.001)
                     continue
                 self.step(n)
@@ -422,7 +428,7 @@ class WorldSim:
 
     # ------------------------------------------------------------------ clock
     def wait_until(self, t: float | None = None, hold: str | None = None, timeout: float | None = None,
-                   rank: int = 0, seconds: float = 0.0) -> float:
+                   rank: int = 0, seconds: float = 0.0, pulls: bool = True) -> float:
         """Block until the world reaches ``t`` (``None``: ``seconds`` from now); return the simulated time
         then. A ``t`` already passed means now.
 
@@ -430,7 +436,8 @@ class WorldSim:
         past ``t`` before the caller wakes, and not at all while a woken caller runs, until it waits
         again or calls :meth:`release`. Callers wake one at a time in the order of ``(step, rank, hold)``,
         where ``step`` is the first world step at or after ``t``, so what happens depends neither on
-        ``speed`` nor on thread timing nor on how ``t`` was rounded. A hold whose owner is neither
+        ``speed`` nor on thread timing nor on how ``t`` was rounded. With ``freeze_idle``, the world
+        steps only while a caller that ``pulls`` waits; one that does not (perception) only stops it. A hold whose owner is neither
         waiting nor woken for ``HOLD_LEASE_S`` wall seconds is ignored.
 
         A reset, a stop or a :meth:`release` of the hold ends the wait early. ``timeout`` wall seconds
@@ -444,19 +451,27 @@ class WorldSim:
             if self._thread is None and step > self._step_now():
                 self.step(step - self._step_now())
             if hold is not None:
-                self._holds[hold] = _Hold(step, rank)
+                self._holds[hold] = _Hold(step, rank, pulls)
                 self._clock.notify_all()
-            while (self._running and self._epoch == epoch and (hold is None or hold in self._holds)
-                   and not self._due(step, hold)):
-                left = None if end is None else end - time.monotonic()
-                if left is not None and left <= 0:
-                    raise TimeoutError(f"the world clock did not let {hold or 'the caller'} wake at step {step}")
-                if hold is not None:
-                    self._holds[hold].seen = time.monotonic()
-                self._clock.wait(0.05 if left is None else min(0.05, left))
+            pulling = hold is None and pulls and step > self._step_now()
+            self._pulling_waits += pulling
+            try:
+                self._wait_due(step, hold, epoch, end)
+            finally:
+                self._pulling_waits -= pulling
             if hold is not None and self._epoch == epoch and hold in self._holds:
-                self._holds[hold] = _Hold(step, rank, woken=True)
+                self._holds[hold] = _Hold(step, rank, pulls, woken=True)
             return self.time
+
+    def _wait_due(self, step: int, hold: str | None, epoch: int, end: float | None) -> None:
+        while (self._running and self._epoch == epoch and (hold is None or hold in self._holds)
+               and not self._due(step, hold)):
+            left = None if end is None else end - time.monotonic()
+            if left is not None and left <= 0:
+                raise TimeoutError(f"the world clock did not let {hold or 'the caller'} wake at step {step}")
+            if hold is not None:
+                self._holds[hold].seen = time.monotonic()
+            self._clock.wait(0.05 if left is None else min(0.05, left))
 
     def release(self, hold: str) -> None:
         """End ``hold``: the world no longer waits for its owner."""
@@ -488,6 +503,10 @@ class WorldSim:
             return False
         mine = self._holds[hold]
         return min((h.step, h.rank, name) for name, h in live.items() if not h.woken) >= (mine.step, mine.rank, hold)
+
+    def _pulled(self) -> bool:
+        """True when a caller waits for world time to pass (see ``freeze_idle``)."""
+        return self._pulling_waits > 0 or any(h.pulls and not h.woken for h in self._live_holds().values())
 
     def _hold_limit(self) -> int | float:
         """Step the world may advance to: the current one while a hold runs, else the earliest step a
@@ -1038,6 +1057,7 @@ class WorldSim:
                 "t": self.time,
                 "paused": self.paused,
                 "speed": speed_json(self.speed),
+                "freezeIdle": self.freeze_idle,
                 "entities": [{"id": e.id, "category": e.category.value, "role": e.role} for e in self.template.entities],
                 "robots": {rid: {"holding": rs.attached, "gripper": "closed" if rs.closed else "open"}
                            for rid, rs in self.robots.items()},
