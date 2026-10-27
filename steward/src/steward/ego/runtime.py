@@ -45,6 +45,7 @@ class RobotLink:
 
     def __init__(self, url: str):
         self.url = url.rstrip("/")
+        self.closed = False  # set on shutdown: clock waits stop retrying
 
     def sensors(self) -> dict:
         return call("GET", f"{self.url}/sensors")
@@ -61,6 +62,34 @@ class RobotLink:
 
     def camera_png(self, width: int = 320, height: int = 240) -> bytes:
         return call("GET", f"{self.url}/camera/rgb?width={width}&height={height}")
+
+    def wait_until(self, t: float | None = None, hold: str | None = None, rank: int = 0) -> float:
+        """Wait until the world clock reaches ``t`` (``None``: now) and, with ``hold``, the world lets
+        this control loop or input run (:meth:`WorldSim.wait_until`); return the world time then."""
+        body = {"hold": hold, "rank": rank, **({} if t is None else {"until": t})}
+        while True:
+            try:
+                return call("POST", f"{self.url}/clock/wait", body)["t"]
+            except HttpError as exc:
+                if exc.status != 504 or self.closed:
+                    raise
+
+    def arm(self, hold: str, t: float | None = None, rank: int = 0) -> None:
+        """Register ``hold`` at world time ``t`` (``None``: now) without waiting, so the world stops for
+        it before its owner first waits."""
+        try:
+            call("POST", f"{self.url}/clock/wait", {"hold": hold, "rank": rank, "timeoutS": 0.0,
+                                                     **({} if t is None else {"until": t})})
+        except HttpError as exc:
+            if exc.status != 504:
+                raise
+
+    def sleep(self, seconds: float) -> float:
+        """Let ``seconds`` of world time pass and return the world time then."""
+        return self.wait_until(self.wait_until() + seconds)
+
+    def release(self, hold: str) -> None:
+        call("POST", f"{self.url}/clock/release", {"hold": hold})
 
 
 ALERT_TEXT_MAX = 1500
@@ -88,10 +117,12 @@ class EgoRuntime:
         self._roles: dict[str, str] = {}  # the latest role assignment, kept unless clearly outweighed
         self.activity: collections.deque[dict] = collections.deque(maxlen=ACTIVITY_MAX)
         self._activity_ids = itertools.count(1)
+        self._input_lock = threading.Lock()
+        self.inputs: list[dict] = []  # Ego API requests as applied, with their world time (:meth:`apply`)
         self._alert_ids = itertools.count(1)
         self.executor = SkillExecutor(self.link.command, self._motion_state, self._mark_held, self.config.motion,
                                       shift=self._shift_track, on_error=lambda msg: self.alert(msg, "skill"),
-                                      on_finish=self._skill_finished)
+                                      on_finish=self._skill_finished, clock=self.link)
         self._view_scene: tuple[dict, int, float] | None = None  # (ES dict, version, stamp) for the view
         renderer = EgoViewRenderer()
         self.view = ViewLoop("ego", lambda settings: self._render_view(renderer, settings), renderer.close)
@@ -101,12 +132,14 @@ class EgoRuntime:
         """Start perception in a worker thread. The first frame is taken there too: RGB-D frames
         are rendered on the world's main thread, which may be the caller."""
         self._running = True
+        self.link.arm("perception")
         self._thread = threading.Thread(target=self._loop, name="ego-perception", daemon=True)
         self._thread.start()
         self.view.start()
 
     def stop(self) -> None:
         self._running = False
+        self.link.closed = True
         self.view.stop()
         if self._thread is not None:
             self._thread.join(timeout=2.0)
@@ -169,11 +202,19 @@ class EgoRuntime:
         self.receipts.clear()
 
     def _loop(self) -> None:
+        """Perceive every ``1 / perception_hz`` seconds of world time, from the time the runtime started;
+        the world waits for each update."""
         period = 1.0 / self.config.perception_hz
         telemetry_every = max(1, int(self.config.perception_hz / self.config.telemetry_hz))
         k = 0
+        t: float | None = None
         while self._running:
-            t0 = time.monotonic()
+            try:
+                t = self.link.wait_until(None if t is None else t + period, "perception")
+            except (HttpError, OSError) as exc:
+                self.last_error = f"robot port unavailable: {exc}"
+                time.sleep(period)
+                continue
             try:
                 self._poll_once()
                 k += 1
@@ -185,7 +226,29 @@ class EgoRuntime:
             except Exception as exc:  # noqa: BLE001 - perception must keep running; the operator is alerted
                 self.last_error = f"{type(exc).__name__}: {exc}"
                 self.alert(f"感知循环出现异常：{type(exc).__name__}: {exc}", "runtime")
-            time.sleep(max(0.0, period - (time.monotonic() - t0)))
+        try:
+            self.link.release("perception")
+        except (HttpError, OSError):
+            pass  # the world is gone or restarting; its hold lease expires on its own
+
+    def apply(self, request: dict, fn, at: float | None = None, then: float | None = None):
+        """Apply one Ego API request (``method``, ``path``, ``query``, ``body``) at a world instant, after
+        the control loops due then, and append it with that time to :attr:`inputs`. A replay
+        (:func:`steward.ego.server.replay`) passes the recorded time ``at`` and the next one, ``then``,
+        at which the world stops for the next request."""
+        with self._input_lock:
+            try:
+                t = self.link.wait_until(at, "input", rank=1)
+            except (HttpError, OSError):
+                return fn()  # no world clock (the robot port is unreachable): applied now, not recorded
+            try:
+                return fn()
+            finally:
+                self.inputs.append({"t": t, **request})
+                if then is None:
+                    self.link.release("input")
+                else:
+                    self.link.arm("input", then, rank=1)
 
     # --------------------------------------------------------------- state
     def ego_state(self) -> SceneState:

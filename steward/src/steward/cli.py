@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import signal
 import subprocess
@@ -420,6 +421,10 @@ def cmd_chores(args) -> int:
     return 0 if ok else 1
 
 
+def _speed(text: str) -> float:
+    return math.inf if text == "max" else float(text)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="steward")
     parser.add_argument("--root", default=str(DEFAULT_ROOT), help="Steward data root (assets, scenes, runs)")
@@ -431,7 +436,8 @@ def main(argv: list[str] | None = None) -> int:
         p = sub.add_parser(name)
         p.add_argument("--scenario", default=defaults.get(name, "phase0-chores"))
         in_process = name in ("demo", "shuttle", "chores")
-        p.add_argument("--speed", type=float, default=4.0 if in_process else 1.0)
+        p.add_argument("--speed", type=_speed, nargs="?", const=math.inf, default=4.0 if in_process else 1.0,
+                       help="simulation speed as a multiple of real time; without a value (or 'max'), as fast as possible")
         p.add_argument("--seed", type=int, default=0)
         p.add_argument("--phase", choices=sorted(PHASES), default=LATEST_PHASE,
                        help="phase level of the replaceable modules (switchable at run time from the console)")

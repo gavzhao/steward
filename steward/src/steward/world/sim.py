@@ -1,7 +1,8 @@
 """WSim: the authoritative World State simulation.
 
 WorldSim owns the MuJoCo model built from a World State scene, advances it at a fixed timestep
-(paced against wall time by ``speed``, or stepped explicitly), executes robot actuator commands,
+(paced against wall time by ``speed``, ``math.inf`` for as fast as possible, or stepped explicitly),
+keeps the clock robot control loops and client inputs wait on (:meth:`WorldSim.wait_until`), executes robot actuator commands,
 performs Phase 0 ideal grasping, generates each robot's sensor readings, and reads the physics
 state back as a World State ``SceneState``.
 
@@ -32,6 +33,7 @@ from steward.scene.schema import Relation, RigidTree, SceneState, exact
 
 _COLLISION_GROUPS = np.array([1, 0, 0, 1, 0, 0], dtype=np.uint8)
 HIDDEN_GROUP = 4  # not drawn by MuJoCo's default visualisation options
+HOLD_LEASE_S = 2.0  # wall seconds a hold may go unseen (its owner neither waiting nor done) before the world ignores it
 _JOINT_WIDTH = {int(mujoco.mjtJoint.mjJNT_FREE): (7, 6), int(mujoco.mjtJoint.mjJNT_BALL): (4, 3),
                 int(mujoco.mjtJoint.mjJNT_SLIDE): (1, 1), int(mujoco.mjtJoint.mjJNT_HINGE): (1, 1)}
 
@@ -41,6 +43,11 @@ _COLOR_NAMES = {
     "white": (0.95, 0.95, 0.96), "gray": (0.60, 0.62, 0.65), "brown": (0.58, 0.40, 0.24), "beige": (0.80, 0.67, 0.50),
     "yellow": (0.90, 0.85, 0.20),
 }
+
+
+def speed_json(speed: float) -> float | str:
+    """``speed`` as JSON: a multiple of real time, or ``"max"`` for as fast as possible."""
+    return "max" if speed == math.inf else speed
 
 
 def color_name(rgba) -> str:
@@ -96,6 +103,15 @@ class _RenderRequest:
 
 
 @dataclass
+class _Hold:
+    """A robot control loop or client input the world clock waits for (see :meth:`WorldSim.wait_until`)."""
+    step: int  # index of the world step it wakes at
+    rank: int
+    woken: bool = False
+    seen: float = field(default_factory=time.monotonic)  # wall time its owner last waited or woke
+
+
+@dataclass
 class _RobotState:
     entity_id: str
     closed: bool = False
@@ -120,6 +136,7 @@ class WorldSim:
         self._seed = seed
         self._overview = overview_camera
         self.lock = threading.RLock()
+        self._clock = threading.Condition(self.lock)
         self._thread: threading.Thread | None = None
         self._running = False
         self.paused = False
@@ -140,6 +157,7 @@ class WorldSim:
         for renderer in getattr(self, "_renderers", {}).values():
             close_renderer(renderer)
         self._epoch = getattr(self, "_epoch", 0) + 1
+        self._holds: dict[str, _Hold] = {}
         self._renderers: dict[tuple[int, int], mujoco.Renderer] = {}
         self._index_bodies()
         self.step_count = 0
@@ -385,23 +403,99 @@ class WorldSim:
 
     def _loop(self) -> None:
         """Pace simulation time against wall time. The anchor is re-taken after a pause, a speed
-        change or a reset, so none of them makes the simulation jump forward."""
+        change or a reset, so none of them makes the simulation jump forward. The world never steps
+        past the earliest wake-up time of a hold, nor at all while a woken hold runs (:meth:`wait_until`)."""
         wall0, sim0, speed0, epoch0 = time.perf_counter(), self.time, self.speed, self._epoch
         while self._running:
-            with self.lock:
-                now_sim, epoch = self.time, self._epoch
-            if self.paused or self.speed != speed0 or epoch != epoch0:
-                wall0, sim0, speed0, epoch0 = time.perf_counter(), now_sim, self.speed, epoch
-            if self.paused:
-                time.sleep(0.01)
-                continue
-            behind = sim0 + (time.perf_counter() - wall0) * speed0 - now_sim
-            if behind > self.timestep:
-                with self.lock:
-                    if self._epoch == epoch0:
-                        self.step(min(int(behind / self.timestep), self.max_batch))
-            else:
-                time.sleep(0.001)
+            with self._clock:
+                now, epoch = self.time, self._epoch
+                if self.paused or self.speed != speed0 or epoch != epoch0:
+                    wall0, sim0, speed0, epoch0 = time.perf_counter(), now, self.speed, epoch
+                n = min(self.max_batch, self._hold_limit() - self._step_now())
+                if speed0 != math.inf:
+                    n = min(n, self._step_index(sim0 + (time.perf_counter() - wall0) * speed0) - self._step_now())
+                if self.paused or n <= 0:
+                    self._clock.wait(0.01 if self.paused else 0.001)
+                    continue
+                self.step(n)
+                self._clock.notify_all()
+
+    # ------------------------------------------------------------------ clock
+    def wait_until(self, t: float | None = None, hold: str | None = None, timeout: float | None = None,
+                   rank: int = 0, seconds: float = 0.0) -> float:
+        """Block until the world reaches ``t`` (``None``: ``seconds`` from now); return the simulated time
+        then. A ``t`` already passed means now.
+
+        With ``hold``, the caller is a robot control loop or a client input. The world does not step
+        past ``t`` before the caller wakes, and not at all while a woken caller runs, until it waits
+        again or calls :meth:`release`. Callers wake one at a time in the order of ``(step, rank, hold)``,
+        where ``step`` is the first world step at or after ``t``, so what happens depends neither on
+        ``speed`` nor on thread timing nor on how ``t`` was rounded. A hold whose owner is neither
+        waiting nor woken for ``HOLD_LEASE_S`` wall seconds is ignored.
+
+        A reset, a stop or a :meth:`release` of the hold ends the wait early. ``timeout`` wall seconds
+        without waking raise :class:`TimeoutError`; a hold then stays registered, so ``timeout=0``
+        registers it without waiting. Without the clock thread (:meth:`start`) the call steps the
+        world itself."""
+        end = None if timeout is None else time.monotonic() + timeout
+        with self._clock:
+            epoch = self._epoch
+            step = max(self._step_now(), self._step_index(self.time + seconds if t is None else t))
+            if self._thread is None and step > self._step_now():
+                self.step(step - self._step_now())
+            if hold is not None:
+                self._holds[hold] = _Hold(step, rank)
+                self._clock.notify_all()
+            while (self._running and self._epoch == epoch and (hold is None or hold in self._holds)
+                   and not self._due(step, hold)):
+                left = None if end is None else end - time.monotonic()
+                if left is not None and left <= 0:
+                    raise TimeoutError(f"the world clock did not let {hold or 'the caller'} wake at step {step}")
+                if hold is not None:
+                    self._holds[hold].seen = time.monotonic()
+                self._clock.wait(0.05 if left is None else min(0.05, left))
+            if hold is not None and self._epoch == epoch and hold in self._holds:
+                self._holds[hold] = _Hold(step, rank, woken=True)
+            return self.time
+
+    def release(self, hold: str) -> None:
+        """End ``hold``: the world no longer waits for its owner."""
+        with self._clock:
+            self._holds.pop(hold, None)
+            self._clock.notify_all()
+
+    def _step_index(self, t: float) -> int:
+        """Index of the first world step at or after time ``t``; a time within a millionth of a step
+        of a step counts as on it."""
+        return math.ceil(t / self.timestep - 1e-6)
+
+    def _step_now(self) -> int:
+        return round(self.time / self.timestep)
+
+    def _live_holds(self) -> dict[str, _Hold]:
+        now = time.monotonic()
+        return {name: h for name, h in self._holds.items() if now - h.seen < HOLD_LEASE_S}
+
+    def _due(self, step: int, hold: str | None) -> bool:
+        """True when the caller of :meth:`wait_until` may wake: ``step`` is reached and, for a hold, no
+        other hold runs and none waits ahead of it."""
+        if self._step_now() < step:
+            return False
+        if hold is None:
+            return True
+        live = self._live_holds()
+        if any(h.woken for name, h in live.items() if name != hold):
+            return False
+        mine = self._holds[hold]
+        return min((h.step, h.rank, name) for name, h in live.items() if not h.woken) >= (mine.step, mine.rank, hold)
+
+    def _hold_limit(self) -> int | float:
+        """Step the world may advance to: the current one while a hold runs, else the earliest step a
+        hold waits for (``math.inf`` when none does)."""
+        live = self._live_holds().values()
+        if any(h.woken for h in live):
+            return self._step_now()
+        return min((h.step for h in live), default=math.inf)
 
     # --------------------------------------------------------------- commands
     def command(self, robot_id: str, cmd: dict) -> dict:
@@ -943,7 +1037,7 @@ class WorldSim:
             return {
                 "t": self.time,
                 "paused": self.paused,
-                "speed": self.speed,
+                "speed": speed_json(self.speed),
                 "entities": [{"id": e.id, "category": e.category.value, "role": e.role} for e in self.template.entities],
                 "robots": {rid: {"holding": rs.attached, "gripper": "closed" if rs.closed else "open"}
                            for rid, rs in self.robots.items()},

@@ -1,8 +1,9 @@
 """Skill execution: turn a Prediction Receipt's plan into timed actuator commands.
 
 Motion uses only the robot's own estimates (odometry, encoders, ES). Base motion ramps a
-position setpoint along each path segment at a bounded speed in simulation (or wall) time taken
-from sensor stamps; joints settle to targets with one sag correction. A stop request interrupts
+position setpoint along each path segment at a bounded speed in simulation time taken from sensor
+stamps; joints settle to targets with one sag correction. Control ticks follow the world clock when
+one is given, so a skill moves the same at every simulation speed. A stop request interrupts
 the current skill between control ticks and holds the current pose.
 """
 
@@ -14,10 +15,14 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 
 import numpy as np
 
 from steward.math3d import wrap_angle
+
+if TYPE_CHECKING:
+    from steward.ego.runtime import RobotLink
 
 
 class SkillStopped(Exception):
@@ -87,8 +92,14 @@ class SkillExecutor:
 
     def __init__(self, command: Callable[[dict], None], state: Callable[[], dict], mark_held: Callable[[str], None],
                  config: MotionConfig | None = None, shift: Callable[[str, list[float]], None] | None = None,
-                 on_error: Callable[[str], None] | None = None, on_finish: Callable[[Job], None] | None = None):
+                 on_error: Callable[[str], None] | None = None, on_finish: Callable[[Job], None] | None = None,
+                 clock: RobotLink | None = None):
+        """``clock`` is the robot link whose world clock times the control ticks (one hold per job,
+        ``skill/<job id>``); without it a tick sleeps ``tick_s`` of wall time."""
         self._on_error = on_error
+        self._clock = clock
+        self._now = 0.0
+        self._hold = ""
         self._on_finish = on_finish
         self._command = command
         self._state = state
@@ -110,6 +121,8 @@ class SkillExecutor:
             self.jobs[job.id] = job
             self.current = job
             self._stop.clear()
+        if self._clock is not None:
+            self._clock.arm(f"skill/{job.id}")
         threading.Thread(target=self._run, args=(job, skill, receipt), name=f"skill-{job.id}", daemon=True).start()
         return job
 
@@ -134,6 +147,9 @@ class SkillExecutor:
     # ---------------------------------------------------------------- runner
     def _run(self, job: Job, skill: str, receipt: dict) -> None:
         try:
+            if self._clock is not None:
+                self._hold = f"skill/{job.id}"
+                self._now = self._clock.wait_until(None, self._hold)
             plan = receipt.get("plan", {})
             if skill == "look_around":
                 self._look_around(job)
@@ -162,8 +178,16 @@ class SkillExecutor:
             self._safe_retract()
         finally:
             job.finished = self._state()["stamp"]
+            if self._clock is not None:
+                self._release_clock(f"skill/{job.id}")
             if self._on_finish is not None:
                 self._on_finish(job)
+
+    def _release_clock(self, hold: str) -> None:
+        try:
+            self._clock.release(hold)
+        except Exception:  # noqa: BLE001 - the world is gone or restarting; its hold lease expires on its own
+            pass
 
     def _safe_retract(self) -> None:
         try:
@@ -174,7 +198,10 @@ class SkillExecutor:
     def _tick(self) -> dict:
         if self._stop.is_set():
             raise SkillStopped()
-        time.sleep(self.config.tick_s)
+        if self._clock is None:
+            time.sleep(self.config.tick_s)
+        else:
+            self._now = self._clock.wait_until(self._now + self.config.tick_s, self._hold)
         return self._state()
 
     # ------------------------------------------------------------- primitives
