@@ -161,7 +161,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with DeepSeekHarness(
@@ -205,13 +205,13 @@ for line in sys.stdin:
     assert ptc_events[-1]["data"]["meta"] == {"cwd": "/selected", "path": "/selected/note.txt", "view": {"line": 3}}
     for event in ptc_events:
         assert not {"description", "parameters", "schema"}.intersection(event["data"])
-    dumped_env = json.loads(env_dump.read_text())
+    dumped_env = json.loads(env_dump.read_text(encoding="utf-8"))
     assert dumped_env["DEEPSEEK_API_KEY"] == "env-key"
     assert dumped_env["DEEPSEEK_BASE_URL"] == "http://127.0.0.1:4321"
     assert dumped_env["DSH_CWD"] is None
     assert dumped_env["DSH_SESSION_ROOT"] is None
     assert dumped_env["DSH_CORDIS_CONFIG"] is None
-    assert json.loads(init_dump.read_text()) == {
+    assert json.loads(init_dump.read_text(encoding="utf-8")) == {
         "approvalRequests": True,
         "cwd": str(tmp_path),
         "provider": "deepseek-official",
@@ -242,7 +242,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     seen: list[str] = []
@@ -281,7 +281,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with DeepSeekHarness(
@@ -314,7 +314,7 @@ for line in sys.stdin:
     elif msg.get("method") == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
     monkeypatch.chdir(tmp_path)
 
@@ -327,7 +327,7 @@ for line in sys.stdin:
         pass
 
     expected = str(tmp_path.resolve())
-    assert json.loads(capture.read_text()) == {
+    assert json.loads(capture.read_text(encoding="utf-8")) == {
         "process": expected,
         "environment": None,
         "wire": expected,
@@ -356,7 +356,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with DeepSeekHarness(
@@ -404,7 +404,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     seen: list[str] = []
@@ -460,7 +460,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with DeepSeekHarness(
@@ -495,7 +495,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with DeepSeekHarness(_launch_args=(sys.executable, str(script)), cwd=str(tmp_path)) as harness:
@@ -535,7 +535,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with DeepSeekHarness(_launch_args=(sys.executable, str(script)), cwd=str(tmp_path)) as harness:
@@ -566,7 +566,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with HarnessClient(_launch_args=(sys.executable, str(script))) as client:
@@ -710,7 +710,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     def broken_filter(_notification: object) -> bool:
@@ -750,7 +750,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with HarnessClient(_launch_args=(sys.executable, str(script))) as client:
@@ -777,7 +777,7 @@ for line in sys.stdin:
     elif method == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with HarnessClient(_launch_args=(sys.executable, str(script))) as client:
@@ -809,7 +809,7 @@ for line in sys.stdin:
     elif msg.get("method") == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with HarnessClient(_launch_args=(sys.executable, str(script))) as client:
@@ -826,7 +826,7 @@ import time
 
 print("bridge is still starting", file=sys.stderr, flush=True)
 time.sleep(60)
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with HarnessClient(
@@ -864,7 +864,7 @@ for line in sys.stdin:
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"serverInfo": {"name": "fake-dsh"}}}), flush=True)
     elif msg.get("method") == "shutdown":
         time.sleep(60)
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     client = HarnessClient(
@@ -904,7 +904,7 @@ for line in sys.stdin:
 
 time.sleep(0.05)
 Path(os.environ["QUIESCED_MARKER"]).write_text("quiesced")
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     client = HarnessClient(
@@ -918,7 +918,7 @@ Path(os.environ["QUIESCED_MARKER"]).write_text("quiesced")
     client.initialize(provider="deepseek-official", cwd="/workspace", model="dsagent")
     client.close()
 
-    assert marker.read_text() == "quiesced"
+    assert marker.read_text(encoding="utf-8") == "quiesced"
 
 
 def test_initialize_failure_reaps_started_runtime(tmp_path: Path) -> None:
@@ -936,7 +936,7 @@ for line in sys.stdin:
     elif msg.get("method") == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     client = HarnessClient(_launch_args=(sys.executable, str(script)))
@@ -1001,7 +1001,7 @@ for line in sys.stdin:
     elif msg.get("method") == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     client = HarnessClient(_launch_args=(sys.executable, str(script)))
@@ -1019,7 +1019,7 @@ import sys
 
 print("fatal bridge exploded", file=sys.stderr, flush=True)
 sys.exit(42)
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with HarnessClient(
@@ -1051,7 +1051,7 @@ with open(os.environ["SEEN"], "w") as seen:
         elif "id" in msg and msg.get("method") == "shutdown":
             print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
             break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     with HarnessClient(
@@ -1070,7 +1070,7 @@ with open(os.environ["SEEN"], "w") as seen:
         for thread in threads:
             thread.join()
 
-    for line in output.read_text().splitlines():
+    for line in output.read_text(encoding="utf-8").splitlines():
         json.loads(line)
 
 
@@ -1097,7 +1097,7 @@ for line in sys.stdin:
     elif msg.get("method") == "shutdown":
         print(json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {}}), flush=True)
         break
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     module_dir = tmp_path / "deepseek_harness_runtime"
@@ -1106,7 +1106,7 @@ for line in sys.stdin:
         f"""
 def resolve_bundled_launch_args(mode=None):
     return ({sys.executable!r}, {str(runtime)!r})
-""".strip()
+""".strip(), encoding="utf-8"
     )
 
     monkeypatch.syspath_prepend(str(tmp_path))
@@ -1119,7 +1119,7 @@ def test_client_default_launch_uses_bundled_dsh_sdk_profile_and_explicit_home(
     env_dump = tmp_path / "env.json"
     home = tmp_path / "home"
     patch = tmp_path / "sdk.patch.yml"
-    patch.write_text("[]\n")
+    patch.write_text("[]\n", encoding="utf-8")
     _install_fake_bundled_dsh(tmp_path, monkeypatch)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("DSH_HOME", str(tmp_path / "ambient-home"))
@@ -1134,7 +1134,7 @@ def test_client_default_launch_uses_bundled_dsh_sdk_profile_and_explicit_home(
         init = client.initialize(provider="deepseek-official", cwd="/workspace", model="deepseek-v4-pro")
 
     assert init.serverInfo.name == "bundled-runtime"
-    assert json.loads(env_dump.read_text()) == {
+    assert json.loads(env_dump.read_text(encoding="utf-8")) == {
         "argv": ["--profile", "sdk", "--patch", str(patch)],
         "DSH_HOME": str(home),
         "DSH_CORDIS_CONFIG": None,
@@ -1153,7 +1153,7 @@ def test_client_accepts_explicit_environment_dsh_home(
     ) as client:
         client.initialize(provider="deepseek-official", cwd="/workspace", model="deepseek-v4-pro")
 
-    assert json.loads(env_dump.read_text()) == {
+    assert json.loads(env_dump.read_text(encoding="utf-8")) == {
         "argv": ["--profile", "custom"],
         "DSH_HOME": str(home),
         "DSH_CORDIS_CONFIG": None,

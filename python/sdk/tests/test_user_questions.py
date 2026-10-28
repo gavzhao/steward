@@ -67,7 +67,7 @@ for line in sys.stdin:
     elif method == 'shutdown':
         send({'id': frame['id'], 'result': {}})
         break
-''')
+''', encoding="utf-8")
     return path
 
 
