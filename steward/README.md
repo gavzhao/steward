@@ -7,20 +7,24 @@ Steward 是基于 DeepSeek Harness 的具身智能机器人系统。设计见仓
 ```sh
 uv sync
 .venv/bin/steward demo          # 构建厨房并运行「把杯子放到桌上」，按 World State 判定成败
+.venv/bin/steward up            # 常驻运行世界与机器人（默认循环搬运场景 phase0-shuttle）
+open http://127.0.0.1:7400/console   # 浏览器控制台：斜视主视图、相机、地图、指标、控制
+.venv/bin/steward shuttle --api http://127.0.0.1:7420 --steps 0   # 在餐桌、柜子、餐边柜之间循环搬运
 ./scripts/check.sh              # Python 测试、DSH 插件编译与测试、组合配置快照比对
 ```
 
 ## 与 DeepSeek Harness 一起运行
 
 ```sh
+echo 'DEEPSEEK_API_KEY=sk-...' > .env     # 已被 Git 忽略，运行脚本自动加载
 .venv/bin/steward up                      # WCA :7400，机器人端口 :7410，Ego API :7420
-./scripts/setup-dsh-profiles.sh           # 构建插件，在 var/dsh 下创建 ego 与 world profile
-export DEEPSEEK_API_KEY=...
-DSH_HOME=var/dsh/robot-1 dsh/node_modules/.bin/dsh --profile ego "把杯子放到桌上"
-DSH_HOME=var/dsh/world dsh/node_modules/.bin/dsh --profile world --port 3091
+./scripts/setup-dsh-profiles.sh           # 构建插件，创建 ego、world、world-task profile
+./scripts/run-ego.sh "把杯子放到桌上"       # 机器人智能体
+./scripts/run-world.sh "按描述构建一间厨房……"  # World Harness 一次性任务
+./scripts/run-world.sh --port 3091        # World Harness 浏览器界面
 ```
 
-`ego` profile 是机器人的 Ego Harness，只能经 Ego API 访问自我态；`world` profile 是 World Harness，经世界控制接口构建资产、组合场景、控制 Episode。两者使用不同的 `DSH_HOME`。
+`ego` profile 是机器人的 Ego Harness，只能经 Ego API 感知与行动，shell、文件、网页等通用工具已禁用；`world` 与 `world-task` profile 是 World Harness，经世界控制接口构建资产、组合场景、控制 Episode。机器人与世界使用不同的 `DSH_HOME`。
 
 ## 目录
 

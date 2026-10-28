@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { test } from 'node:test'
 import { egoTools } from '@steward/dsh-tool-ego'
+import { worldTools } from '@steward/dsh-tool-world'
 import { receiptDenial, reviewExecution } from '@steward/dsh-robot-safety'
 
 function fakeEgo(receipts = {}) {
@@ -25,6 +26,7 @@ function fakeEgo(receipts = {}) {
     job: async () => job('succeeded'),
     wait: async (id, timeoutS) => { calls.push(['wait', id, timeoutS]); return job('succeeded') },
     stop: async () => ({ stopped: null }),
+    reportProblem: async (report) => { calls.push(['report', report]); return { id: 1, ...report } },
   }
 }
 
@@ -39,7 +41,7 @@ function tool(tools, name) {
 test('ego tools expose the robot vocabulary without World State concepts', () => {
   const names = egoTools(fakeEgo()).map(t => t.name)
   assert.deepEqual(names, ['ego_state', 'ego_query', 'ego_observe', 'ego_explore', 'ego_predict', 'skill_run',
-    'skill_status', 'body_stop'])
+    'skill_status', 'body_stop', 'report_problem'])
   for (const t of egoTools(fakeEgo())) assert.doesNotMatch(t.description, /ground truth|world state/i)
 })
 
@@ -57,6 +59,30 @@ test('skill_run waits for completion by default', async () => {
   const result = await tool(egoTools(ego), 'skill_run').execute({ receipt: 'rcpt-1' }, exec('skill_run'))
   assert.deepEqual(ego.calls.map(c => c[0]), ['run', 'wait'])
   assert.equal(result.state, 'succeeded')
+})
+
+test('world_edit maps floor and support placements to World Control API edits', async () => {
+  const edits = []
+  const world = { edit: async (request) => { edits.push(request); return { ok: true, ...request } } }
+  const edit = tool(worldTools(world), 'world_edit')
+  await edit.execute({ action: 'move', entity: 'w:cup-1', on: 'w:sideboard', offset_x: 0.1 }, exec('world_edit'))
+  await edit.execute({ action: 'spawn', entity: 'w:bowl-2', asset: 'bowl', x: 1, y: -0.5, yaw: 0.3 }, exec('world_edit'))
+  await edit.execute({ action: 'remove', entity: 'w:plate-1' }, exec('world_edit'))
+  assert.deepEqual(edits, [
+    { action: 'move', entity: 'w:cup-1', on: 'w:sideboard', offset: [0.1, 0] },
+    { action: 'spawn', entity: 'w:bowl-2', asset: 'bowl', at: { x: 1, y: -0.5 }, yaw: 0.3 },
+    { action: 'remove', entity: 'w:plate-1' },
+  ])
+  await assert.rejects(edit.execute({ action: 'move', entity: 'w:cup-1', x: 1 }, exec('world_edit')), /both x and y/)
+  await assert.rejects(edit.execute({ action: 'spawn', entity: 'w:x', asset: 'cup' }, exec('world_edit')), /needs a placement/)
+})
+
+test('report_problem forwards the goal, step, diagnosis and message to the operator alert', async () => {
+  const ego = fakeEgo()
+  const report = { goal: '把红碗放到操作台', step: '抓取 e:4', diagnosis: '抓取两次都没对准：e:4 位置不确定度 4 cm', message: '请检查碗的位置' }
+  const result = await tool(egoTools(ego), 'report_problem').execute({ ...report, extra: 'dropped' }, exec('report_problem'))
+  assert.deepEqual(ego.calls.at(-1), ['report', report])
+  assert.equal(result.diagnosis, report.diagnosis)
 })
 
 test('safety policy denies skill_run without a receipt, with an unknown one, or above the risk limit', async () => {

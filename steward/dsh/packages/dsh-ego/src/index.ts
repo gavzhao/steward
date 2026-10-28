@@ -22,7 +22,7 @@ export interface JsonObject {
 }
 
 /** Skills the Ego Runtime can predict and run. */
-export type EgoSkill = 'navigate' | 'pick' | 'place'
+export type EgoSkill = 'navigate' | 'pick' | 'place' | 'open' | 'close'
 
 /** Filter for Ego-State object queries. */
 export interface EgoQuery {
@@ -35,6 +35,16 @@ export interface EgoQuery {
 }
 
 /** ESim result that authorises running one predicted plan once before it expires. */
+/** An entity in the way of a predicted skill. */
+export interface ReceiptBlocker {
+  id: string
+  category: string
+  /** True for floor-standing graspable entities the robot can carry out of the way. */
+  movable: boolean
+  /** Free floor spots [x, y] where a movable blocker can be put down. */
+  parkAt: number[][]
+}
+
 export interface PredictionReceipt {
   id: string
   skill: EgoSkill
@@ -49,10 +59,24 @@ export interface PredictionReceipt {
   /** Robot clock time after which the receipt is rejected. */
   expiresAt: number
   plan: JsonObject
+  /** Entities that made an infeasible prediction fail; movable ones come with parking spots. */
+  blockers?: ReceiptBlocker[]
   used?: boolean
 }
 
 /** One skill execution. */
+/** A problem the robot cannot resolve by itself, as the operator console shows it. */
+export interface ProblemReport {
+  /** What the robot is trying to achieve. */
+  goal: string
+  /** The step it was carrying out when it got stuck. */
+  step: string
+  /** Its own analysis of its tool log: the dominant cause and the evidence for it. */
+  diagnosis: string
+  /** What happened, what was tried, and what the operator needs to do. */
+  message: string
+}
+
 export interface SkillJob {
   id: string
   skill: string
@@ -156,4 +180,13 @@ export abstract class EgoService extends Service {
    * @returns the id of the interrupted job, if any.
    */
   abstract stop(signal?: AbortSignal): Promise<JsonObject>
+
+  /**
+   * Tell the operator about a situation the robot cannot resolve by itself; the Steward console
+   * shows it as an alert until the operator acknowledges it.
+   * @param report - the goal, the step, the robot's own diagnosis, and what it needs.
+   * @param signal - caller cancellation.
+   * @returns the recorded alert.
+   */
+  abstract reportProblem(report: ProblemReport, signal?: AbortSignal): Promise<JsonObject>
 }

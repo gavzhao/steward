@@ -32,10 +32,12 @@ function receiptView(r: PredictionReceipt): JsonObject {
   for (const key of ['target', 'object', 'support', 'spot', 'dock', 'reach', 'lift', 'pathLength']) {
     if (key in plan) brief[key] = plan[key]
   }
-  return {
+  const view: JsonObject = {
     receipt: r.id, skill: r.skill, feasible: r.feasible, risk: r.risk, maxRisk: r.maxRisk,
     withinRiskLimit: r.withinRiskLimit, issues: r.issues, expiresAt: r.expiresAt, plan: brief,
   }
+  if (r.blockers && r.blockers.length) view.blockers = r.blockers.map(b => ({ ...b }))
+  return view
 }
 
 function jobView(job: SkillJob): JsonObject {
@@ -63,9 +65,11 @@ export function egoTools(ego: EgoService): ToolDefinition[] {
     }),
     defineTool({
       name: 'ego_query',
-      description: 'Find perceived objects by category (for example "cup", "table") and/or near another object.',
+      description: 'Find perceived objects by category (for example "cup", "table") and/or near another object. '
+        + 'Matching uses each object\'s role (the scene-level reading of what it is) and then its category '
+        + 'probabilities, best match first, so a sideboard partly seen and labelled "counter" is still found.',
       parameters: {
-        category: { type: 'string', description: 'Object category to keep.' },
+        category: { type: 'string', description: 'Object category or role to look for.' },
         near: { type: 'string', description: 'Id of an object whose surroundings to search, for example "e:3".' },
         radius: { type: 'number', description: 'Search radius in metres around `near` (default 1).' },
       },
@@ -102,21 +106,31 @@ export function egoTools(ego: EgoService): ToolDefinition[] {
       description: 'Predict the consequences of a skill before doing it. Returns a receipt with a risk score, the '
         + 'issues found (for example a target whose position is too uncertain to grasp reliably), and the planned '
         + 'motion. Skills: "navigate" (needs x, y, optional yaw in radians), "pick" (needs target), "place" (needs '
-        + 'on; optional offset [dx, dy] in metres in the support frame). If the risk is too high, follow the issues '
-        + '(for example move closer and observe) and predict again. A receipt can be run once and expires.',
+        + 'on: a surface, an open drawer to put the object into, or a larger bowl to nest a bowl in; optional offset '
+        + '[dx, dy] in metres in the surface frame; or at: [x, y] to put it down on the floor, optional yaw for its '
+        + 'final heading in radians), "open" / "close" (needs target: a drawer; the robot pulls or pushes its handle '
+        + 'and ends standing back so the inside is in view). Floor-standing objects such as chairs are picked from '
+        + 'beside them, carried a few centimetres above the floor in front of the robot, and put down with at; '
+        + 'while carrying them the robot needs more room to turn. Objects inside a drawer are only seen while it is '
+        + 'open. If the risk is too high or the skill is infeasible, follow the issues (for example move closer and '
+        + 'observe, or choose another spot) and predict again. An infeasible receipt lists blockers: entities in the '
+        + 'way, whether they can be moved, and parking spots (parkAt) out of the way; clear a movable blocker first '
+        + '(pick it, place it at a parking spot), then predict the original skill again. A receipt can be run once '
+        + 'and expires.',
       parameters: {
-        skill: { type: 'string', enum: ['navigate', 'pick', 'place'], required: true, description: 'Skill to predict.' },
-        target: { type: 'string', description: 'pick: id of the object to grasp.' },
-        on: { type: 'string', description: 'place: id of the surface to put the held object on.' },
+        skill: { type: 'string', enum: ['navigate', 'pick', 'place', 'open', 'close'], required: true, description: 'Skill to predict.' },
+        target: { type: 'string', description: 'pick: id of the object to grasp; open/close: id of the drawer.' },
+        on: { type: 'string', description: 'place: id of the surface, open drawer or larger bowl to put the held object on or in.' },
         offset: { type: 'array', items: { type: 'number' }, description: 'place: [dx, dy] on the surface, metres.' },
+        at: { type: 'array', items: { type: 'number' }, description: 'place on the floor: [x, y] in metres.' },
         x: { type: 'number', description: 'navigate: goal x in metres.' },
         y: { type: 'number', description: 'navigate: goal y in metres.' },
-        yaw: { type: 'number', description: 'navigate: goal heading in radians.' },
+        yaw: { type: 'number', description: 'navigate: goal heading; place with at: final heading of the object (radians).' },
       },
       output: { schema: JSON_OUTPUT, render: (_a, v) => text(v) },
       async execute(args, exec) {
         const params: JsonObject = {}
-        for (const key of ['target', 'on', 'offset', 'x', 'y', 'yaw'] as const) {
+        for (const key of ['target', 'on', 'offset', 'at', 'x', 'y', 'yaw'] as const) {
           if (args[key] !== undefined) params[key] = args[key]
         }
         return json(receiptView(await ego.predict(args.skill, params, exec.signal)))
@@ -154,6 +168,25 @@ export function egoTools(ego: EgoService): ToolDefinition[] {
       output: { schema: JSON_OUTPUT, render: (_a, v) => text(v) },
       async execute(_args, exec) {
         return json(await ego.stop(exec.signal))
+      },
+    }),
+    defineTool({
+      name: 'report_problem',
+      description: 'Alert the operator that you hit a situation you cannot resolve by yourself: an unexpected '
+        + 'error, a skill that keeps failing, or a task that cannot be done from here. Before calling, review your own '
+        + 'tool calls in this turn and diagnose: which prediction or skill failed, the error text, how often it '
+        + 'repeated, where you were, and how it relates to blockers, uncertainty, or missing or duplicate objects in '
+        + 'the ego state. The operator console shows the report as an alert. Call it once, then stop.',
+      parameters: {
+        goal: { type: 'string', required: true, description: 'What you are trying to achieve.' },
+        step: { type: 'string', required: true, description: 'The step you were carrying out when you got stuck.' },
+        diagnosis: { type: 'string', required: true, description: 'The cause you diagnosed from your tool log and the evidence for it.' },
+        message: { type: 'string', required: true, description: 'What happened, what you tried, and what you need from the operator.' },
+      },
+      output: { schema: JSON_OUTPUT, render: (_a, v) => text(v) },
+      async execute(args, exec) {
+        const { goal, step, diagnosis, message } = args
+        return json(await ego.reportProblem({ goal, step, diagnosis, message }, exec.signal))
       },
     }),
   ]

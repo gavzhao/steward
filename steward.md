@@ -1255,6 +1255,8 @@ steward（fork 仓库根目录）
 | Phase 4 | 多机器人与显式通信 | 两台机器人协作完成任务且无信息泄漏 |
 | Phase 5 | 实体机器人：Real HAL、标定、动作捕捉近似 GT | 同一 EH bundle 无代码修改在实机上完成 Phase 3 任务 |
 
+各阶段以模块级替换推进：新 Phase 只替换相应模块的实现，历史 Phase 的实现保留在代码中，并登记在功能级别表（`steward/phases.py`）里；系统可以在运行中切换到任一已实现的级别，用于对比与调试。
+
 各阶段的当前进度见第 13 节。
 
 ## 12. 待决问题
@@ -1273,12 +1275,12 @@ steward（fork 仓库根目录）
 
 ### 13.1 当前阶段
 
-截至 2026-10-26，**Phase 0 已实现**，脚本化验收全部通过。Phase 0 验收中由语言模型驱动的两项（机器人智能体自主完成任务、WH 从文字描述生成厨房）的工具与 profile 已就绪，待配置 `DEEPSEEK_API_KEY` 后运行。
+截至 2026-10-26，**Phase 0 已完成**，验收全部通过，包括由 DeepSeek 模型驱动的两项：WH 根据文字描述构建并校验了一间新厨房（`llm-kitchen`），机器人智能体在默认厨房和这间新厨房里都自主把杯子放到了桌上，由 World State 确认。
 
 | 阶段 | 状态 | 说明 |
 |---|---|---|
-| Phase 0 | 已实现 | 世界仿真、资产与场景构建、单机器人理想感知、ES 估计、简化 ESim、技能执行、Observer、EH 与 WH 两个 DSH bundle |
-| Phase 1 | 未开始 | 真实感知链路、定位误差、Protobuf 协议、EH 工具返回图像 |
+| Phase 0 | 已完成 | 世界仿真、资产与场景构建、单机器人理想感知、ES 估计、简化 ESim、技能执行、Observer、EH 与 WH 两个 DSH bundle；模型驱动验收通过 |
+| Phase 1 | 进行中 | 已完成：RGB-D 传感器与匿名实例掩码、机器人端感知链路（反投影、按先验分类、体素积累、形状补全）、ES 收敛指标与控制台曲线、功能级别切换；Phase 1 下餐桌排列可完成。未完成：Phase 1 下的叠碗与抽屉操作稳定性、定位误差与配准、Protobuf 协议、EH 工具返回图像 |
 | Phase 2 | 未开始 | ESim 物理推演、扰动与触发器、WH 向机器人派发任务 |
 | Phase 3 | 未开始 | 精细操作技能、长时任务 |
 | Phase 4 | 未开始 | 多机器人与显式通信 |
@@ -1289,15 +1291,31 @@ steward（fork 仓库根目录）
 | 组件 | 功能 |
 |---|---|
 | 场景数据模型 | 第 4.2 节的 `SceneState`：WS 与 ES 共用的数据结构；`validate_world` / `validate_ego` 两种校验，ES 中出现 `w:` 标识即判定为信息泄漏；WSim 与 ESim 共用的 `SceneState → MJCF` 转换器；实体有向包围盒计算 |
-| 资产 | 生成器：建筑外壳、操作台、餐桌、带抽屉的柜子、杯子、盘子、碗、Phase 0 移动操作机器人；MuJoCo 物理校验（编译、质量、跌落、倾倒、穿透）；多视角预览渲染；按模板哈希寻址、带版本的资产库；也接受直接编写的实体模板 |
-| 场景与 Scenario | 从已发布资产组合场景（地面摆放或放在其他实体上），检查相互穿透与沉降；保存与加载 Scenario；默认 Phase 0 厨房 |
-| WSim | 固定步长物理，按墙钟倍速推进；机器人底盘、升降、伸缩位置控制；理想抓取；带噪声的里程计与关节编码器；理想检测器（视野、遮挡、距离相关噪声、类别混淆）；World State 读回与「支撑」「附着」关系推导；总览与机器人相机渲染 |
+| 资产 | 生成器：建筑外壳、操作台、餐边柜（可选居中抽屉）、餐桌、带抽屉的柜子、杯子、盘子、碗、可叠放的薄壁碗（红 / 绿 / 蓝，大小不同）、透明高脚酒杯、带把手的咖啡杯、玩具熊、带转轴的剪刀（两片刀身由转动关节相连）、玩具飞机、平放的手枪、带盖药瓶、粉色玻璃香水瓶、Phase 0 移动操作机器人；柜子与餐边柜的抽屉共用同一抽屉生成函数（滑轨、把手、`pullable` / `container` 可供性）；MuJoCo 物理校验（编译、质量、跌落、倾倒、穿透）；多视角预览渲染；按模板哈希寻址、带版本的资产库；也接受直接编写的实体模板 |
+| 场景与 Scenario | 从已发布资产组合场景（地面摆放、放在其他实体上，或用 `in` 放进抽屉），检查相互穿透与沉降；保存与加载 Scenario；`phase0-kitchen`（把杯子放到桌上）、`phase0-shuttle`（循环搬运）与 `phase0-chores`（家务循环，`steward up` 的默认 Scenario：餐桌远半边散放三只碗、高脚杯与咖啡杯，餐边柜抽屉里有玩具熊和剪刀，柜子抽屉为空）三个厨房 |
+| 循环搬运任务 | 杯子和碗在餐桌 → 柜子 → 餐边柜 → 餐桌之间轮转：三件家具始终空一件，每步搬运下一站空着的那件物品，从不在同一件家具上堆放两件；每步从 ES 判断物品位置，风险超限时先靠近观察；`steward shuttle` 逐步显示进度并用 World State 核对，`--steps 0` 持续循环。持续循环时单步失败不终止任务：先把手中物品放到空闲家具上，再环顾刷新 ES 后继续；被移到循环外（如操作台）的物品会被搬回空闲家具 |
+| 家务循环任务 | 三只碗直径 30 / 20 / 12 厘米（红 / 绿 / 蓝，高 7.5 / 6 / 4.5 厘米），尺寸差异大，叠放后每只都离外层碗壁足够远，能单独看清、单独抓取；机器人的碗形状先验覆盖直径约 11–31 厘米。底部离地不到 15 厘米的「餐具」（升降够不到，常是地上的垫子、标记被认成碗或盘子）不排进摆放。`steward chores` 每轮三个阶段：①餐具在餐桌靠近房间中央的一侧按占地面积从小到大排成一排（槽位按物品宽度计算）；②搬到餐边柜台面：碗从大到小逐个叠进上一只碗，咖啡杯和高脚杯并排放在旁边；③先走到餐边柜和柜子前观察抽屉，打开两只抽屉，交换两边的物品再关上（餐边柜抽屉：玩具熊、手枪；柜子抽屉：玩具飞机、药瓶、香水瓶）。拉开的抽屉只有伸出柜体的部分能放东西，一只抽屉放不下两边的物品，所以先把餐边柜抽屉的物品暂放到餐边柜台面上，柜子抽屉的物品移进餐边柜抽屉后，再把暂放的物品移进柜子抽屉；存在概率低于 0.5 的碎片轨迹不当作抽屉里的物品。物品按 ES 中的类别、颜色与估计尺寸识别；每个动作都先预测再执行；每个阶段结束后由 World State 核对（顺序、叠放链、抽屉内容与抽屉关闭）。`--rounds 0` 无限循环；阶段失败时先放下手中物品、环顾后进入下一阶段；尊重机器人独占控制 |
+| WSim | 固定步长物理，按墙钟倍速推进（物理跟不上时每批最多 25 步，保证机器人命令的仿真时间延迟不超过 50 毫秒）；机器人底盘、升降、伸缩位置控制；理想抓取（只抓叠放堆最上面的物体）；抽屉把手抓取：夹爪闭合在把手附近时，以 PD 力沿滑轨驱动抽屉跟随夹爪，抽屉里的物体靠摩擦随之移动；带噪声的里程计与关节编码器；理想检测器（视野、遮挡、距离相关噪声、类别混淆；抽屉作为独立部件检测；输出颜色；透明物体每帧只有 60% 概率被检出）；World State 读回与「支撑」「附着」关系推导（支撑关系注明支撑链接，如 `drawer`）；总览与机器人相机渲染 |
 | Steward 主机 | 世界控制接口 WCA（状态、World State、时钟、Episode、渲染、Observer 报告、资产 / 场景 / Scenario 编写）；每个机器人一个独立端口，只提供传感器、相机、执行器命令与单向遥测 |
-| Ego Runtime | 检测融合为 ES（机器人自分配 `e:` id、卡尔曼位置融合、类别分布、存在概率、重复轨迹合并、支撑与附着关系）；基于 ES 的二维路径规划与停靠足迹检查；简化 ESim 与 Prediction Receipt；导航、抓取、放置、环顾技能；Ego API；运行端再次核验收据 |
+| Ego Runtime | 检测融合为 ES（机器人自分配 `e:` id、卡尔曼位置融合、类别分布、颜色、存在概率；关联与合并要求尺寸一致，叠放的碗保持为独立轨迹；支撑与附着关系，抽屉和碗作为容器时取最内层容器；关着的抽屉里看不到的物体不衰减；机器人自己拉动抽屉后把抽屉及其内容一起平移）；基于 ES 的二维路径规划、停靠足迹检查与预停靠点原地转身空间检查；简化 ESim 与 Prediction Receipt（放置点优先远离边缘）；导航、抓取、放置、环顾、开抽屉、关抽屉技能；放置目标可以是台面（可指定偏移）、打开的抽屉（只放在伸出柜体的部分）、更大的碗（叠放）或地面（`at: [x, y]` 与可选朝向）；落地物体（如椅子）从侧面抓取，离地 5 厘米、手臂保持伸出搬运，避免与底盘重叠；搬运低处物体时路径规划、停靠与原地转身都计入它扫过的范围，放到地面时先在预备位对正再直线进入；被抓物体在关联检测之前先按本帧位姿更新，转身时不会把自己搬着的物体误认成新物体；停靠点选在落地的家具旁（碗里的碗停靠在餐边柜前，抽屉停靠在抽屉正前方）；执行现场的安全检查：停靠位姿偏差、抓取前夹爪对准、松手前夹爪须在台面范围内，否则不松手并报告失败；Ego API；运行端再次核验收据 |
 | Observer | ES 与 World State 关联；召回率、误检、位置误差、类别准确率、NEES、自定位误差；JSONL 记录；泄漏检测 |
-| Ego Harness bundle | `ctx.ego` 服务定义与 HTTP 提供者；机器人工具 `ego_state`、`ego_query`、`ego_observe`、`ego_explore`、`ego_predict`、`skill_run`、`skill_status`、`body_stop`；安全守卫（`tools/pre-execute` 收据核验、`ctx.tools.guard` 最终否决、`/estop` 急停） |
-| World Harness bundle | `ctx.world` 服务定义与 HTTP 提供者；工具 `world_status`、`world_scene`、`asset_search`、`asset_get`、`asset_create`、`asset_preview`、`asset_publish`、`scene_compose`、`scene_render`、`scenario_save`、`world_catalog`、`episode_control`、`world_clock`、`observer_report` |
-| 检查与工具 | pytest 23 项；DSH 单元测试与跨语言集成测试 5 项；组合配置快照比对；多随机种子回归脚本；命令行 `steward build-kitchen / world / ego / up / demo` |
+| Ego Harness bundle | `ctx.ego` 服务定义与 HTTP 提供者；机器人工具 `ego_state`、`ego_query`、`ego_observe`、`ego_explore`、`ego_predict`（技能 navigate / pick / place / open / close）、`skill_run`、`skill_status`、`body_stop`、`report_problem`；安全守卫（`tools/pre-execute` 收据核验、`ctx.tools.guard` 最终否决、`/estop` 急停）；禁用继承自 `dsh-base` 的 shell、文件、网页、工作流、后台任务与工作目录工具，机器人只能经 `ctx.ego` 感知与行动 |
+| World Harness bundle | `ctx.world` 服务定义与 HTTP 提供者；工具 `world_status`、`world_scene`、`asset_search`、`asset_get`、`asset_create`、`asset_preview`、`asset_publish`、`scene_compose`、`scene_render`、`scenario_save`、`world_catalog`、`episode_control`、`world_clock`、`world_edit`、`observer_report` |
+| 运行中世界编辑 | WCA `POST /wca/edit`，不停止 Episode：`move` 移动物体或家具（`at` 地面位置或 `on` 支撑实体加偏移；移动家具时其上的物体随之移动），`spawn` 从已发布资产新增实体，`remove` 删除实体（其上物体自然掉落）。新增与删除在主线程重新编译 MuJoCo 模型，按名称迁移关节状态、执行器目标、仿真时间与机器人抓取。编辑后若与其他实体穿透超过 1 厘米则撤销并拒绝；机器人、建筑与机器人手中的物体不可编辑。每次编辑记为 `world/edit` 事件（`plausibility: god-mode`）；机器人不会收到通知，只能靠自身感知发现变化 |
+| 控制台对话 | 控制台右侧（窄屏时在主视图下方）的「操作员对话」，可切换发给「世界 · World Harness」或「机器人 · robot-1」（EH）。每条消息由主机以 `dsh --profile world-task --json`（WH，`var/dsh/world`）或 `dsh --profile ego --json`（EH，`var/dsh/robot-1`，工作目录为机器人自己的空 `workspace`）处理；每个 harness 各自的首条消息开启 DSH Session，之后用 `--session-id` 接续。`--patch` 叠加层把 `steward-world-api` 指向本主机的 WCA，或把 `steward-ego-runtime` 指向机器人的 Ego API 并设置 `owner: operator`。主机读取 NDJSON 运行事件，控制台实时显示回复与每次工具调用（可展开查看参数与结果），按来源着色。主机为 WH 附加操作说明（先 `world_scene` 再 `world_edit`，不启停 Episode、不使用 shell 或文件工具），为 EH 附加任务做法（先 `ego_state`，每个动作先 `ego_predict` 再 `skill_run`，执行后自查），EH 仍只有机器人工具，看不到 World State。`--world-harness ''` / `--robot-harness ''` 分别关闭；`steward world` 用 `--ego-api` 指定机器人的 Ego API |
+| 快速放弃与告警 | 避免长时间卡住：抓起落地物体前先确认抓起后能沿直线退到可转身的位置（最多 1.2 米），否则换一侧或判为不可行；落地目标在路径规划中仍是障碍；`place at=` 物体当前位置可原地放下（不需移动）；带着低处物体无法转身时，预测结果直接给出原地放下的参数；底盘移动或转身 2 秒没有进展立即判为受阻失败（不再等到超时）。EH 操作说明要求同一目标连续 3 次预测不可行或同一技能失败 2 次就停止，并调用新工具 `report_problem`。Ego Runtime 记录告警：技能执行中的未预料异常（如 AssertionError）、感知循环异常（循环继续运行）、Ego API 异常（返回 500）、智能体经 `report_problem` 的报告，以及 Ego Harness 进程运行失败；相同的未确认告警只累加次数。Ego API：`GET /ego/alerts`、`POST /ego/alert`、`POST /ego/alerts/ack`。控制台把每条新告警以红色错误消息打印在对话窗口，并在 Ego State 视图上闪烁红色底色、显示错误信息，直到操作员点「知道了」确认；对话窗口的「停止」按钮可随时结束当前目标的本轮任务（结束进程组并停止机器人动作，自动交还控制） |
+| 功能级别（Phase 切换） | `steward/phases.py` 登记每个 Phase 下各可替换模块的实现：新 Phase 只做模块级替换，旧实现保留。`phase0`：WSim 直接给带噪声的检测结果，ER 卡尔曼融合；`phase1`：WSim 只给 RGB、深度与匿名实例掩码，ER 自行感知。控制台顶栏「功能级别」下拉框与 `POST /wca/phase` 可在运行中切换，`--phase` 设定启动级别；ER 每帧检查传感器类型，切换后清空已感知物体（手中物体与正在执行的技能保留）并用新链路重新感知。Observer 每条记录标注当时的级别，误差曲线上以虚线标出切换时刻，便于前后对比 |
+| Phase 1 感知链路 | WSim 每帧在主线程渲染机器人头部相机的 RGB、深度（距离相关噪声，毫米量化；透明表面 40% 无读数、噪声 3 倍）与分割，分割转换为匿名实例掩码（每帧打乱编号、边缘随机腐蚀、小碎片丢弃；建筑墙体与抽屉为独立实例，机器人自身与地面为背景），经机器人端口 `/sensors/rgbd` 以压缩 npz 传输。ER（`ego/perception.py`、`ego/classify.py`）按机器人自估的相机位姿反投影每个掩码区域，用凸包最小外接矩形拟合可见部分的有向包围盒，按机器人的形状先验（尺寸、落地或悬空、颜色）给出类别概率（颜色名：无彩色按亮度分黑 / 灰 / 白，有彩色按色度匹配），每个物体只取一个统一尺度，与所有原型都相差很远的区域归为 unknown（开集拒识，例如地面上的扁平标记不再被认成碗）；区域碰到图像下缘、或下边缘三成以上像素的正下方有近 15 厘米以上的遮挡物时，记为未见底部，此时最低点不作为落地或悬空的证据，落地原型改按可见顶部比较高度（近看只见桌面的餐桌、被操作台挡住下半截的墙不再被判为 unknown），轨迹只要有一次看见底部即按悬空或落地判断，从未见底的落地家具把包围盒补到地面；关联中的落地 / 悬空冲突也只看见过底部时才成立；按位置、尺寸与类别相似度做全局贪心关联（门限随物体尺寸缩放；手中物体附近的区域只归手中物体；落地与悬空不混；墙只并墙；大家具的局部须整个落在家具框内且低于顶面，伸出的抽屉不并入柜体；已看过 5 次以上、尺寸不小于 0.3 米的家具不会作为局部并入另一类别的轨迹（餐边柜不会被并进误判成家具的一段墙）；顶部高于 1.25 米的区域（这个家里只有墙这么高）只并入墙轨迹；长边超过 0.8 米的轨迹，若并入后点在包围盒俯视面积中的覆盖率低于 20%（L 形或空心，如墙角的两面墙），拒绝这次并入，否则凹进去的墙角会被补成占据房间内部的实心立方体；包含机器人底盘中心的非手持轨迹（机器人就站在那里）与和墙一样高的非墙轨迹直接删除；Ego State 视图中未知物体半透明绘制，不遮挡其后的物体；看过多次的物体不接受比它大 1.5 倍以上的测量，近看时被截掉下半截的柜体不会并进抽屉）；每条轨迹积累 1 厘米体素的全部可见表面，按修剪后的体素重算包围盒（小于 0.3 米的小物体每个视角都几乎能看全，改取最近 12 次单帧包围盒的中位数，被碰歪挪动的物体或错开的重复轨迹合并时不会把杯子撑成碗；抓起时清空），类别确定后按先验尺寸沿视线方向补全未见部分；衰减考虑深度遮挡；重复轨迹按体素重合合并，套叠的碗保持独立；被图像边缘截断的区域等完整视角再建轨迹，墙例外（近处的墙总是横贯整幅图像），同一平面上首尾相接的墙段合并为一面墙。探索实验中召回率在第一次环顾后达到 85%（未达部分是关着的抽屉里的物体），平均位置误差约 1–1.5 厘米、尺寸误差约 1–2 厘米、类别准确率接近 100%、NEES 约 2 |
+| 挡路检测、清障与活锁 | ESim 对不可行的预测给出 `blockers`：造成碰撞的实体、是否可搬动（可抓取的落地家具类物体，如椅子；落在地上的餐具升降够不到，只报告挡路、不算可搬动），以及可搬动实体的停放位置 `parkAt`（房间内、离家具至少 0.9 米、优先靠墙），并在 issues 里给出「先搬开再重试」的建议；预测被可搬动实体挡住时不再绕去「靠近观察」。家务流程的每个动作遇到这种情况先清障：把挡路物体搬到停放位置后重试（每个动作最多清两个）。同一阶段连续两次因同一原因失败（忽略编号与数字），或整整一轮三个阶段都失败（无论原因是否相同），即判为活锁。第一次先自救：底盘保持朝向、向离已知物体最远的可行方向后撤 0.35 米，再到房间中心与两个对角观察点各环顾一周，刷新 Ego State；自救后仍未完成任何阶段又判为活锁时，发出「家务任务卡住」告警并原地等待，操作员点「知道了」或 3 分钟后再继续。自救与告警前先做自我诊断（`steward/diagnosis.py`）：每个动作开始前记下正在做什么，每次失败记下阶段、动作、原文与机器人位姿；诊断把失败原文归类（感知缺失、支撑关系未知、目标够不着、感知不确定、抓取未对准、底盘受阻、手臂受阻、没有可用空间、路径被挡），给出主要原因及其占比，并附上只来自机器人自身记录的依据（首先逐个点名失败的目标物体（如「抓取 灰色碗 e:2 失败 2 次：3 个方向的停靠位被墙 e:1 挡住；1 个方向伸手 1.08 米超出范围」），失败原文译成简短中文；几次失败时是否基本没动、离哪些物体太近、哪个物体反复挡住停靠位、操作目标是否不合常理（如餐具在地面上，可能是误识别）、当前阶段需要的家具在 Ego State 里缺失、重复或把握偏低）与建议；告警写明目标（轮次与阶段）、当前步骤、自我诊断和最近三次失败；失败后的恢复只在物体从视野中丢失时才环顾，手里的落地物体原地放下。EH 的操作说明要求先根据 blockers 想清楚原因：可搬动的先搬开，不可搬动的才换做法或报告。规划餐桌排列前先在约 1.3 米处观察餐桌，避免透明高脚杯某一帧未被检测到而漏排。停滞判定同时要求时间窗与至少 8 次新的状态更新，高倍速下不会误判 |
+| 机器人计划面板 | Ego API 的 `POST /ego/plan` 接收客户端发布的计划（目标、各步骤及状态 pending / active / done / failed / skipped、当前步骤、最近的困难、状态 running / recovering / escaping / waiting-operator），`GET /ego/plan` 返回最新计划与正在执行的技能；格式不符返回 409。家务流程在开局、每个阶段开始与结束、每个动作、失败、自救与告警时发布。主机经聊天桥读取，控制台主视图下方的「机器人计划」卡片显示目标、本轮各阶段（✓ / ▶ / ✗ / ○）、当前步骤、正在执行的技能与已用时间，困难以黄色显示，自救与等待操作员时变红，自救与告警时困难栏显示自我诊断；所有告警都带目标、当前步骤与自我诊断（告警方未给出目标或步骤时取自当前计划），对话错误行与 Ego State 视图下方的状态卡片逐项显示；状态卡片显示宏观步骤（当前阶段、轮次与状态）、微观步骤（正在做的动作）与正在执行的技能；告警全文只出现在对话窗口（机器人告警与世界侧感知监测都打印为错误行），有未解除的告警时 Ego State 画面闪烁红色底色与红框，对话窗口标题栏出现「解除告警」，解除后闪烁自动停止；对话窗口有新消息时自动滚到最新；卡片下部是可滚动的历史（步骤、技能开始与结束、困难、状态、告警），由 Ego Runtime 记录最近 300 条，经 `/ego/plan?since=k` 增量取得，页面刷新后不丢失；EH 的 `report_problem` 必须给出 goal、step、diagnosis 与 message，操作说明要求它先回看本轮工具调用记录再诊断；操作员与 EH 对话期间改为显示 EH 用 `todo_write` 列出的待办 |
+| 机器人独占控制 | Ego API `GET/POST /ego/control`：客户端可获取独占控制（同时停止正在执行的技能），持有期间只有带相同 `owner` 的 `skill/run` 与 `ego/explore` 请求能启动技能，其他客户端收到 409；任何客户端都可以停止机器人。控制台的机器人对话在每轮开始时以 `operator` 身份获取控制、结束时交还；`steward shuttle` 每步开始前检查控制权，被接管时暂停并显示「机器人由 operator 接管」，交还后先环顾刷新 ES 再继续 |
+| Steward 控制台 | 顶栏「功能级别」下拉框选择系统运行在哪个 Phase 的实现上（运行中切换）；Observer 指标增加平均尺寸误差，曲线同时画位置误差、尺寸误差与召回率。浏览器页面 `http://127.0.0.1:7400/console`（由 WCA 端口提供，属于 Steward 平面）。主视图是共用同一斜上方相机的两个面板：左为 World State（WSim 的 MuJoCo 自由相机渲染），右为机器人的 Ego State（由机器人一侧的 Ego Runtime 渲染，ES 经与 ESim 相同的 SceneState → MJCF 转换器渲染：只有已感知的物体，按类别着色，存在概率低时变淡，机器人位于自身估计位姿），并叠加 2σ 不确定度圈、标签与到真实位置的误差线。两个面板同步拖动旋转、滚轮缩放，预设斜上方南 / 东南 / 西南与正上方视角；靠近相机一侧的墙体自动剖切（只影响渲染）。下方为机器人头部相机、俯视地图、Observer 指标与误差曲线、抓放事件；顶栏可暂停 / 继续 / 倍速 / 重置 / 切换 Scenario。顶栏的「帧率」下拉框（25 / 10 / 5 / 3 / 1 fps，默认 10，保存在浏览器本地）同时设定两个视图的渲染帧率与机器人头部相机的取帧率；控制台状态（真实状态包围盒、Observer 指标）最多每秒刷新 5 次；页面在后台时全部暂停。物理仿真保持固定步长，不随帧率变化 |
+| 场景级用途标签 | 局部视角下家具（餐边柜 / 柜子 / 操作台 / 餐桌）与相似餐具（咖啡杯 / 杯子）常被混淆，而自然语言任务按名称指称物体，宏观类别一错，后续每个微观步骤都会扑空。Ego API 的 summary 为每个物体给出 `role` 与 `roleConfidence`（`ego/roles.py`）：在每个混淆组内，按各物体完整的类别概率分布联合分配，从最可能的（物体，类别）对开始，家里只有一件的类别（`RoleConfig.singletons`，属于部署知识，默认餐桌、餐边柜、柜子、操作台）不重复分配；轮廓里有抽屉的家具，其餐边柜与柜子的概率乘 2.5。例如另一条轨迹明确是餐桌（0.85）时，「餐桌 0.44、柜子 0.36」且含抽屉的轨迹被读作柜子；可选的唯一类别都已被更可能的物体占用时，按部署知识它不是其中任何一个，改取组外最可能的类别或 unknown（如墙角被认作第二个操作台的一段墙），任务不会选中它。上一次的分配有 1.5 倍的保持加成，两件相似家具的概率小幅起伏时用途标签不会来回互换（否则机器人会被来回派往两处）；放在碗上的扁平物体（只露出碗沿的叠放碗）的碗概率乘 3；放在抽屉里的物体，餐具类别的概率乘 0.2（这个家不在抽屉里放餐具，抽屉里扁平的玩具飞机不会被当成碗搬上餐桌）；不属于任何混淆组的物体取证据调整后的最可能类别。`category` 保留单视角感知结果；家务流程、自我诊断与操作员文字按 `role` 找物体与命名；家务流程对目标家具先确认再动手：用途标签把握低于 0.6 时先在 1.3 米处近看后重读（最多两次），没有物体被认作所需家具时，若有该类别概率不低于 0.3 的候选就先近看它，否则说明它还没被看到，先到房间各观察点环顾搜寻（找到即停），仍找不到才判失败；自我诊断对缺失的家具列出最可能的候选，对把握偏低的报告用途标签的把握与竞争类别；`/ego/query` 先按 role、再按类别概率（≥ 0.2）模糊匹配并按匹配度排序；EH 的操作说明要求按 role 理解操作员的指称。家务流程的餐具同时包括杯子，咖啡杯被认作杯子时不再漏掉 |
+| 感知故障监测 | Observer 每次收到 ES 时与真实状态对比，检查两类严重偏差：占地 1 米以上、在世界中没有对应物体的幽灵物体，以及机器人真实位置落在某个 ES 物体内部。同一偏差连续 3 次出现即报告一次，并分析该范围内实际有什么（两面以上的墙：凹墙角被补成实心盒子；墙和物体：点云被并成一个盒子；多个物体：相邻物体被合并；什么也没有：噪声或错误关联）。主机记录为「世界侧感知监测」告警，打印到对话窗口并让 Ego State 画面闪烁，`steward up` / `steward world` 默认暂停仿真（`--no-pause-on-perception-fault` 关闭），操作员点「解除告警」后恢复；结果只给 Steward 平面，不回传机器人 |
+| 视图渲染与帧同步 | 两个视图与仿真、估计解耦，各在自己的渲染线程上渲染（`steward/viewloop.py`）：World State 视图在主机进程的渲染线程上，持有 WSim 模型与数据的私有副本，每帧只在 WSim 锁内拷贝一次状态，渲染与 JPEG 编码在锁外进行，不占用主线程，也不阻塞物理与传感器渲染；Ego State 视图在 Ego Runtime 的渲染线程上，只读机器人自己的 ES，经 Ego API `POST /ego/view` 设置、`GET /ego/view/frame` 取帧；机器人与地面编译进固定模型，其余物体（ES 中每个都是一个盒子）画在一组预编译的盒子槽位上，每帧只改槽位位姿、尺寸与颜色，Phase 1 中轨迹频繁新建与合并也无需重新编译（槽位不够时翻倍扩容），1024×768 一帧约 10 毫秒；感知线程每次更新后在锁内发布一份 ES 快照，渲染线程只读快照，不等感知更新完成。`steward up` 把 Ego Runtime（含 Ego API 与 Ego State 渲染）作为独立子进程启动，两个渲染器不在同一进程，Ego 一侧可以整体迁移到真实机器人上；子进程随父进程退出，意外退出时父进程报错。两个渲染器之间不通信，只靠一个时钟松散同步：第 k 帧落在 Unix 时间 k / fps 秒，按同一 fps 渲染的视图在同一时刻产出同一帧号（不同主机用 NTP / PTP 对时），来不及时跳到下一刻度而不漂移；没人取帧 3 秒后停止渲染。控制台把相机与帧率一次提交给 WCA `POST /console/view`，主机配置 World State 视图并转发给各机器人的 Ego API；两个面板在每个刻度后经 `GET /console/frame?view=world|ego` 取最新帧（主机只转发 Ego State 帧，不渲染），帧头带帧号、渲染所用相机与渲染端实测帧率，面板标题显示「实测 fps · 帧 #k」，叠加层按该帧的相机绘制。叠加层的物体标签统一排布、互不重叠：离相机近的物体先占原位，其余上下按行、左右按半个标签宽挪到最近的空位并用引线连回物体，附近没有空位的标签不显示；误差曲线上的 Phase 切换标记放在第一个不重叠的行 |
+| 渲染线程归属 | 每个渲染器的 OpenGL 上下文从创建、使用到释放都在同一个线程上（macOS 的 CGL 离屏上下文可在任意线程使用，但同一时刻只能在一个线程上为当前上下文）：机器人相机与 RGB-D 传感器渲染、资产预览、Episode 加载与重置由请求线程排队、主线程执行，没有主线程服务时请求超时而不阻塞物理；两个控制台视图在各自的渲染线程上。关闭渲染器前先切换到它自己的 OpenGL 上下文（`mujoco.Renderer.close` 不会这样做，会误删其他渲染器的 GPU 资源） |
+| Episode 切换 | ER 检测到世界时钟倒退即视为重新开机，清空 ES、收据并取消正在执行的技能 |
+| 检查与工具 | pytest 68 项；DSH 单元测试与跨语言集成测试 7 项；三个 profile 的组合配置快照比对；多随机种子回归脚本；命令行 `steward build-kitchen / world / ego / up / demo / shuttle / chores`（均可用 `--phase` 选择功能级别）；运行脚本 `run-ego.sh`、`run-world.sh` |
 
 ### 13.3 实际布局
 
@@ -1308,7 +1326,7 @@ steward/
 │   ├── scene/                       # SceneState 数据结构、validate_world / validate_ego、SceneState → MJCF、包围盒
 │   ├── assets/                      # 资产生成器、物理校验、预览渲染、内容寻址资产库
 │   ├── authoring/                   # 资产创建与发布、场景组合与检查、Scenario、默认厨房
-│   ├── world/                       # WSim（物理、理想抓取、理想检测器）、Steward 主机（WCA 与机器人端口）
+│   ├── world/                       # WSim（物理、理想抓取、理想检测器、运行中编辑）、Steward 主机（WCA 与机器人端口）、浏览器控制台、WH 对话桥
 │   ├── ego/                         # ER：估计器、规划器、ESim、技能执行、Ego API
 │   ├── observer/                    # Observer：ES 与 GT 对比、NEES、JSONL 记录
 │   ├── mission.py                   # 只经 Ego API 的脚本化任务「把杯子放到桌上」
@@ -1328,7 +1346,9 @@ steward/
 │   │   └── dsh-bundle-world/        # WH bundle
 │   └── test/                        # 工具与守卫单元测试；跨语言集成测试（无语言模型）
 ├── scripts/
-│   ├── setup-dsh-profiles.sh        # 在 var/dsh 下创建 ego 与 world 两个独立 DSH_HOME 与 profile
+│   ├── setup-dsh-profiles.sh        # 在 var/dsh 下创建 ego、world、world-task 三个 profile（两个独立 DSH_HOME）
+│   ├── run-ego.sh                   # 加载 .env，在机器人的空工作目录里运行 EH
+│   ├── run-world.sh                 # 加载 .env，运行 WH（浏览器界面或一次性任务）
 │   ├── check.sh                     # Python 测试 + DSH 编译与测试 + 组合配置快照比对
 │   └── seed_sweep.py                # 多随机种子运行端到端任务并显示进度
 └── compat/snapshots/                # ego 与 world profile 的组合配置快照
@@ -1351,18 +1371,45 @@ uv sync
 # 常驻运行世界与一个机器人：WCA :7400，机器人端口 :7410，Ego API :7420
 .venv/bin/steward up
 
+# 用浏览器打开 Steward 控制台（steward up 或 steward world 运行期间）
+# 「世界编辑对话」需要先运行 ./scripts/setup-dsh-profiles.sh 并在 .env 中配置模型 key
+open http://127.0.0.1:7400/console
+
+# 不经 WH，直接调用 WCA 编辑运行中的世界
+curl -X POST http://127.0.0.1:7400/wca/edit -H 'content-type: application/json' \
+  -d '{"action": "move", "entity": "w:cup-1", "on": "w:sideboard-1", "offset": [0.1, 0]}'
+
 # 分别运行世界与机器人（可放在不同进程或机器上）
 .venv/bin/steward world --wca-port 7400 --robot-port 7410
 .venv/bin/steward ego --robot-url http://127.0.0.1:7410 --api-port 7420
 
-# 构建 DSH 插件，在 var/dsh 下创建 ego（机器人）与 world（世界）两个独立 DSH_HOME
+# 加载指定 Scenario（默认 phase0-shuttle；也可用 phase0-kitchen 或 WH 生成的 llm-kitchen）
+.venv/bin/steward up --scenario llm-kitchen
+
+# 家务循环（steward up 默认加载 phase0-chores）：连到正在运行的 steward up，逐步显示进度，每个阶段用 World State 核对；--rounds 0 无限循环
+.venv/bin/steward chores --api http://127.0.0.1:7420 --rounds 0
+# 或在进程内独立运行固定轮数
+.venv/bin/steward chores --rounds 2 --speed 6
+
+# 循环搬运（需加载 phase0-shuttle：steward up --scenario phase0-shuttle）；--steps 0 持续循环直到 Ctrl+C
+.venv/bin/steward shuttle --api http://127.0.0.1:7420 --steps 0
+# 或在进程内独立运行固定步数
+.venv/bin/steward shuttle --steps 12 --speed 6
+
+# 构建 DSH 插件，创建 ego（机器人）、world 与 world-task（世界）三个 profile
 ./scripts/setup-dsh-profiles.sh
 
-# 由语言模型驱动机器人（需要 DEEPSEEK_API_KEY，并先运行 steward up）
-DSH_HOME=var/dsh/robot-1 dsh/node_modules/.bin/dsh --profile ego "把杯子放到桌上"
+# 模型 key：写入 steward/.env（已被 Git 忽略），运行脚本会自动加载
+echo 'DEEPSEEK_API_KEY=sk-...' > .env
 
-# 打开 World Harness 浏览器界面（需要 DEEPSEEK_API_KEY，并先运行 steward up 或 steward world）
-DSH_HOME=var/dsh/world dsh/node_modules/.bin/dsh --profile world --port 3091
+# 由语言模型驱动机器人（先运行 steward up）；在 var/dsh/robot-1/workspace 空目录里运行
+./scripts/run-ego.sh "你是一台家用机器人。请把杯子放到桌上。"
+
+# World Harness 一次性任务：按文字描述构建资产、场景与 Scenario（先运行 steward up 或 steward world）
+./scripts/run-world.sh "构建一间 4 米 x 3.5 米的小厨房……场景命名 llm-kitchen，并保存同名 scenario"
+
+# World Harness 浏览器界面
+./scripts/run-world.sh --port 3091
 
 # 全部检查：Python 测试、DSH 编译与测试、组合配置快照比对
 ./scripts/check.sh
@@ -1372,7 +1419,7 @@ UPDATE_SNAPSHOTS=1 ./scripts/check.sh      # 评审后接受新的组合配置
 .venv/bin/python scripts/seed_sweep.py --seeds 20
 ```
 
-EH profile 默认从上游 `headless` 模板派生（设置 `ROBOT_TEMPLATE=web` 可改为浏览器界面），WH profile 从上游 `web` 模板派生。DSH 运行时是 npm 上锁定的 `@deepseek-ai/dsh@0.2.1-rc.3`，安装在 `steward/dsh/node_modules`，不使用 fork 中的上游源码构建。
+EH profile 默认从上游 `headless` 模板派生（设置 `ROBOT_TEMPLATE=web` 可改为浏览器界面）；WH 的 `world` profile 从上游 `web` 模板派生，`world-task` 从 `headless` 模板派生，两者共用世界的 `DSH_HOME`。DSH 运行时是 npm 上锁定的 `@deepseek-ai/dsh@0.2.1-rc.3`，安装在 `steward/dsh/node_modules`，不使用 fork 中的上游源码构建。
 
 ### 13.5 已验证
 
@@ -1384,6 +1431,14 @@ EH profile 默认从上游 `headless` 模板派生（设置 `ROBOT_TEMPLATE=web`
 | ES 收敛与校准 | Observer：平均位置误差约 6 厘米降至约 1.3 厘米，NEES 约 2–2.5（三维理论值 3），无泄漏 |
 | 信息隔离 | `validate_ego` 检测 `w:` 标识；机器人端口不提供 WCA 路由，传感器帧不含 World State 标识 |
 | DSH 加载 | `--dump-config` 显示 `dsh-base → dsh-headless → @steward/dsh-bundle-ego`；非法端点在加载时被拒并指明配置行；WH Web 界面正常启动 |
+| 模型驱动：机器人 | DeepSeek 模型经 `run-ego.sh` 在默认厨房与 WH 生成的 `llm-kitchen` 中都自主完成「把杯子放到桌上」（环顾 → 预测 → 靠近 → 抓取 → 放置 → 自查），World State 确认；Observer 平均位置误差 0.5–1.0 厘米，无泄漏；运行中未调用任何 shell 或文件工具 |
+| 模型驱动：WH | DeepSeek 模型经 `run-world.sh` 根据文字描述新建并发布 3 个资产（房间、操作台、小餐桌），全部通过物理校验；复用杯、碗、盘与机器人组合出 `llm-kitchen` 场景并保存同名 Scenario；该 Scenario 可经 WCA 加载 |
+| 循环搬运 | `steward shuttle --steps 12`：四整轮共 12 次搬运全部由 World State 逐步确认；pytest 覆盖前三步的轮转顺序与「任何时刻两件物品不在同一家具上」 |
+| 家务循环 | `steward chores --rounds 2 --speed 6`：两整轮 6 个阶段全部由 World State 确认——餐桌上顺序为高脚杯 < 咖啡杯 < 蓝碗 < 绿碗 < 红碗；餐边柜上红碗 ⊃ 绿碗 ⊃ 蓝碗，咖啡杯与高脚杯并排；玩具熊和剪刀在两只抽屉之间来回对调，两只抽屉都关好。第二轮从叠放状态出发，按从小到大的顺序拆开。pytest 覆盖：初始场景关系、抓住把手拉开抽屉且内容随之移动并可被看到、叠放碗的独立轨迹与容器链、抽屉伸出量、按宽度排列槽位，以及 10 倍速一整轮由 World State 核对 |
+| 运行中世界编辑 | pytest 覆盖：移动到其他支撑面、移动餐桌时盘子随之移动、穿透与受保护实体被拒且世界不变、新增与删除后仿真时间 / 机器人位姿 / 执行器目标不变、WCA 接受省略 `w:` 前缀的 id；DSH 单元测试覆盖 `world_edit` 参数到 WCA 请求的映射 |
+| 控制台对话（模型驱动） | 循环搬运进行中，在控制台输入「在餐桌上再放一个盘子」：WH 依次调用 `world_scene`、`asset_search`、`world_edit spawn`、`world_scene` 核对，约 11 秒完成；接着输入「把盘子 plate-1 从操作台挪到餐桌上，放在新盘子旁边」，WH 沿用同一 Session 直接 `world_edit move`，机器人任务未中断 |
+| 控制台对话：机器人任务（模型驱动） | 循环搬运进行中，切换到「机器人」并输入「把操作台上的盘子拿到餐桌上」：主机接管机器人，循环搬运正在执行的抓取被停止并暂停；EH 依次 `ego_state` → `ego_predict navigate` → `skill_run` → `ego_predict pick`（风险 0）→ 抓取 → 导航到餐桌 → `ego_predict place` → 放置 → `ego_state` 自查并汇报；World State 确认 `w:plate-1` 位于 `w:table-1`。交还控制后循环搬运自动继续并经 World State 确认。pytest 覆盖控制的获取 / 拒绝 / 交还、机器人对话每轮获取与交还控制、EH 在空工作目录运行且操作说明不含 World State、循环搬运在被接管时暂停 |
+| 能力边界 | EH 的组合配置中 `tool-bash`、`tool-pwsh`、`tool-jobs`、`tool-fs`、`tool-fs-search`、`tool-web`、`tool-workflow`、`tool-working-directory` 均为禁用，变化纳入快照比对 |
 
 ### 13.6 与设计的偏差
 
@@ -1392,11 +1447,12 @@ EH profile 默认从上游 `headless` 模板派生（设置 `ROBOT_TEMPLATE=web`
 | 设计 | Phase 0 实现 | 计划 |
 |---|---|---|
 | `scene-schema` 以 Protobuf 为权威定义，通道用 gRPC | Python dataclass 为权威定义，所有通道为 JSON over HTTP；TypeScript 侧只处理工具所需的摘要 | Phase 1 引入 Protobuf 并生成多语言代码 |
-| 感知链路：渲染 → 检测 → 估计 | 理想检测器：直接输出可见物体的类别与带噪声的有向包围盒（含 3% 杯/碗混淆），不含 World State 标识 | Phase 1 |
+| 感知链路：渲染 → 检测 → 估计 | `phase0` 为理想检测器；`phase1` 已实现渲染 → 分割 → 估计，但分割由渲染分割经匿名化与加噪模拟（相当于类别无关的实例分割网络），没有学习型检测器 | 后续以学习型分割替换模拟分割 |
 | 精细抓取 | 理想抓取：夹爪闭合时 5–6 厘米捕获半径内的物体被刚性附着；机械臂与夹爪为纯可视部件，不推动物体 | Phase 3 |
 | ESim 物理推演与信念采样 | 几何与概率评估：路径与足迹碰撞检查、由位置不确定度计算抓空概率；收据携带计划，执行即执行该计划 | Phase 2 |
 | 机器人 `map` 坐标系与世界坐标系不同 | 里程计近似理想，`map` 与 `world` 重合 | Phase 1 引入定位误差与配准 |
-| 扰动、触发器、扰动策略守卫 | 未实现 | Phase 2 |
+| 抽屉、玩具熊与剪刀的物理 | 抽屉由夹爪位置经 PD 力驱动（夹爪本身没有碰撞）；玩具熊是刚体（`deformable` 可供性只作标注）；剪刀的转轴会自然摆动但没有开合技能；透明高脚杯只以较低检出率模拟 | Phase 3 起逐步替换为接触式操作与柔体 |
+| 扰动、触发器、扰动策略守卫 | 只有人工发起的瞬移式编辑（`god-mode`：移动、新增、删除，带穿透检查）；没有物理可行的扰动方式、触发器与扰动策略守卫 | Phase 2 |
 | WH 经 SDK 向机器人派发任务（`task_dispatch`） | 未实现；实验员直接向 EH 下达任务 | Phase 2 |
 | EH 工具返回相机图像 | `ego_observe` 只返回文字结果与图像文件路径；WH 预览图通过上游文件读取工具查看 | Phase 1 接入附件服务 |
-| EH 能力集评审 | EH 继承 `dsh-base` 的通用工具（shell、文件、网页等），已纳入组合配置快照，尚未决定禁用哪些 | Phase 1 前评审 |
+| WH 能力边界 | WH 保留 `dsh-base` 的通用工具（shell、文件等），可读取预览图，也能自行启动进程；验收中它曾自行启动一个世界进程来验证新场景 | Phase 1 评审是否限制 WH 的 shell，或提供专用的场景验证工具 |
