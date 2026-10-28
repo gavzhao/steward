@@ -30,6 +30,7 @@ from steward.mission import (
     _safe_receipt,
     _wait_for_control,
     infeasible,
+    simtime_sleep,
 )
 from steward.net import HttpError, call
 
@@ -141,7 +142,7 @@ def _move(api: str, obj: dict, place: dict, observe: dict, log: list, timeout_s:
     receipt = _safe_receipt(api, "place", place, observe, log)
     job = _run(api, receipt, timeout_s)
     log.append({"step": "place", "object": obj["id"], **place})
-    time.sleep(0.8)
+    simtime_sleep(api, 0.8)
     return job
 
 
@@ -157,7 +158,7 @@ def _view(api: str, furniture: dict, timeout_s: float) -> None:
     if not receipt["withinRiskLimit"]:
         raise infeasible(f"navigate to the front of {furniture['id']}", receipt)
     _run(api, receipt, timeout_s)
-    time.sleep(1.5)
+    simtime_sleep(api, 1.5)
 
 
 def _contents(summary: dict, holder: dict) -> list[str]:
@@ -253,7 +254,7 @@ class Chores:
                 self._doing(f"寻找{zh}：没有物体被认作{zh}，靠近最可能的候选{describe(cand)}（是{zh}的概率 "
                             f"{cand['categories'][role]:.2f}）观察")
                 _approach_to_observe(self.api, cand, distance=CONFIRM_DISTANCE)
-                time.sleep(1.5)
+                simtime_sleep(self.api, 1.5)
                 continue
             obj = max(found, key=lambda o: o["existence"])
             confidence = obj.get("roleConfidence", 1.0)
@@ -261,7 +262,7 @@ class Chores:
                 return obj
             self._doing(f"确认{describe(obj)}：它是{zh}的把握只有 {confidence:.2f}，先靠近观察")
             _approach_to_observe(self.api, obj, distance=CONFIRM_DISTANCE)
-            time.sleep(1.5)
+            simtime_sleep(self.api, 1.5)
         raise MissionFailed(f"no {role} in the ego state")
 
     def _search(self, role: str) -> None:
@@ -317,7 +318,7 @@ class Chores:
         table = self._confirmed("table")
         # Plan the row only after a close look: a transparent glass is not detected in every frame.
         _approach_to_observe(self.api, table, distance=1.3)
-        time.sleep(2.0)
+        simtime_sleep(self.api, 2.0)
         s = _summary(self.api)
         table = _refresh(self.api, table)
         items = tableware(s)
@@ -393,7 +394,7 @@ class Chores:
             if not receipt["withinRiskLimit"]:
                 raise infeasible(f"open {drawer['id']}", receipt)
             _run(self.api, receipt, self.timeout_s)
-            time.sleep(1.5)
+            simtime_sleep(self.api, 1.5)
             self._step("drawers", f"打开{describe(furniture)} 的抽屉", object=drawer["id"])
         return _refresh(self.api, drawer)
 
@@ -455,7 +456,7 @@ class Chores:
                 _explore(self.api, self.timeout_s)
         except (MissionFailed, HttpError) as exc:
             self.log.append({"step": "recover-failed", "error": str(exc)})
-            time.sleep(2.0)
+            simtime_sleep(self.api, 2.0)
 
     def escape(self) -> bool:
         """Break out of a failure loop: back away from whatever the base is pressed against, then

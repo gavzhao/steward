@@ -124,7 +124,7 @@
   <button id="pause">暂停</button>
   <select id="speed" title="仿真倍速">
     <option value="0.5">0.5×</option><option value="1">1×</option><option value="2">2×</option>
-    <option value="4">4×</option><option value="8">8×</option>
+    <option value="4">4×</option><option value="8">8×</option><option value="max">最快</option>
   </select>
   <select id="phase" title="功能级别：系统各模块运行在哪个 Phase 的实现上；运行中可切换，用于对比与调试"></select>
   <select id="fps" title="渲染帧率：世界视图（主机渲染线程）与自我态视图（机器人端渲染线程）按同一帧时钟以此帧率渲染；机器人相机按此帧率请求；控制台状态刷新最多每秒 5 次">
@@ -821,7 +821,7 @@ async function loadScenarios() {
 $('load').onclick = async () => { try { await api('POST', '/wca/episode', { action: 'load', scenario: $('scenario').value }); viewKey = ''; refresh(); } catch (e) { showError(e); } };
 $('reset').onclick = async () => { try { await api('POST', '/wca/episode', { action: 'reset' }); refresh(); } catch (e) { showError(e); } };
 $('pause').onclick = async () => { try { await api('POST', '/wca/clock', { action: state && state.paused ? 'resume' : 'pause' }); refresh(); } catch (e) { showError(e); } };
-$('speed').onchange = async () => { try { await api('POST', '/wca/clock', { action: 'speed', value: Number($('speed').value) }); refresh(); } catch (e) { showError(e); } };
+$('speed').onchange = async () => { try { await api('POST', '/wca/clock', { action: 'speed', value: $('speed').value === 'max' ? 'max' : Number($('speed').value) }); refresh(); } catch (e) { showError(e); } };
 for (const id of ['showGtLabels', 'showEgoLabels', 'showSigma', 'showError']) $(id).onchange = drawOverlays;
 
 $('fps').value = String(fps);

@@ -325,7 +325,7 @@ def test_a_doubtful_or_missing_role_is_looked_at_from_closer_before_acting(monke
     looked: list[str] = []
     monkeypatch.setattr(chores_mod, "_summary", lambda api: next(views))
     monkeypatch.setattr(chores_mod, "_approach_to_observe", lambda api, obj, distance=1.1: looked.append(obj["id"]))
-    monkeypatch.setattr(chores_mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(chores_mod, "simtime_sleep", lambda api, seconds: None)
     runner = Chores("http://unused")
     monkeypatch.setattr(runner, "publish", lambda **changes: None)
     assert runner._confirmed("sideboard")["id"] == "e:21" and looked == ["e:21"]
