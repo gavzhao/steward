@@ -257,3 +257,20 @@ def test_a_room_corner_seen_from_inside_is_concave_and_a_cabinet_front_is_not():
     table = np.vstack([top_t, legs])
     centre, size, _ = box_of(table)
     assert not _concave(table, centre, float(max(size[:2])), cam)
+
+
+def test_what_the_robot_holds_keeps_its_identity_while_carried():
+    from steward.assets.generators import steward_bot
+    from steward.ego.estimator import EgoEstimator, Track
+    from steward.ego.perception import Segment
+
+    est = EgoEstimator(robot_model=steward_bot().to_dict())
+    mug = Track(id="e:8", category_counts={"mug": 6.0, "cup": 2.0}, pos=np.array([-1.4, 0.3, 0.9]), var=np.full(3, 1e-4),
+                yaw=0.0, yaw_var=1e-3, size=np.array([0.1, 0.08, 0.1]), observations=8, first_seen=0.0, last_seen=0.0,
+                existence=1.0, held=True)
+    est.tracks[mug.id] = mug
+    table_view = Segment(points=np.zeros((40, 3)), color=np.array([0.87, 0.76, 0.57]), pixels=900, invalid_frac=0.0,
+                         border=True, range=1.0)
+    est._fuse_cloud(mug, {"seg": table_view, "centre": np.array([-1.4, 0.3, 0.6]), "size": np.array([1.2, 0.8, 0.3]),
+                          "yaw": 0.0, "probs": {"table": 1.0}, "footprint": 1.2}, np.array([0.0, 0.0, 1.4]))
+    assert mug.category == "mug" and "table" not in mug.category_counts

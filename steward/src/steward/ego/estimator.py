@@ -221,6 +221,9 @@ class EgoEstimator:
                     and m_top <= track.top() + 0.1 and m_bottom < track.top() - 0.02
                 if d > gate and not part_of_large:
                     continue
+                if track.held and m["footprint"] > HELD_LARGER * track.footprint + 0.05:
+                    continue  # the gripper hides part of what it holds, but a region much larger than the
+                    # load (the table under it) is never the load
                 size_r = 0.0 if track.held or part_of_large else \
                     abs(math.log(max(m["footprint"], 1e-3) / max(track.footprint, 1e-3)))
                 if size_r > 0.9:
@@ -406,10 +409,13 @@ class EgoEstimator:
 
     def _fuse_cloud(self, track: Track, m: dict, cam_p: np.ndarray) -> None:
         seg = m["seg"]
-        for cat, prob in m["probs"].items():
-            track.category_counts[cat] = track.category_counts.get(cat, 0.0) + prob
-        name = color_name(seg.color, seg.invalid_frac)
-        track.color_counts[name] = track.color_counts.get(name, 0.0) + 1.0
+        if not track.held:
+            # What the robot holds was identified before the grasp; views of it in the gripper are
+            # partly hidden and may mix with what lies around, so they do not relabel it.
+            for cat, prob in m["probs"].items():
+                track.category_counts[cat] = track.category_counts.get(cat, 0.0) + prob
+            name = color_name(seg.color, seg.invalid_frac)
+            track.color_counts[name] = track.color_counts.get(name, 0.0) + 1.0
         track.observations += 1
         track.last_seen = self.stamp
         track.existence = min(1.0, track.existence + 0.2 * (1.0 - track.existence))
@@ -840,6 +846,7 @@ def color_name(rgb: np.ndarray, invalid_frac: float = 0.0) -> str:
 
 VOXEL = 0.01
 ESTABLISHED_VIEWS = 5
+HELD_LARGER = 2.0  # a region with a footprint this many times the held object's is not the held object
 CONVEX_CHECK_M = 0.8  # boxes longer than this are checked for being filled rather than an outline
 MIN_FOOTPRINT_FILL = 0.2
 SMALL_M = 0.3
