@@ -18,7 +18,8 @@ from steward.viewloop import ViewSettings, frame_response
 # Requests that neither change the robot's state nor draw on the world's randomness; all others are
 # applied at a world instant and recorded (:meth:`EgoRuntime.apply`).
 UNRECORDED = frozenset({
-    ("GET", "/ego/state"), ("GET", "/ego/control"), ("GET", "/ego/alerts"), ("GET", "/ego/view"), ("POST", "/ego/view"),
+    ("GET", "/ego/state"), ("GET", "/ego/control"), ("GET", "/ego/alerts"), ("GET", "/ego/dropped"), ("GET", "/ego/view"),
+    ("POST", "/ego/view"),
     ("GET", "/ego/view/frame"), ("GET", "/ego/plan"), ("GET", "/ego/receipt"), ("GET", "/skill/status"),
     ("POST", "/skill/wait"), ("POST", "/clock/sleep"), ("GET", "/ego/inputs"),
 })
@@ -103,6 +104,7 @@ def _routes(runtime: EgoRuntime) -> dict:
         ("POST", "/ego/explore"): lambda q, b: runtime.explore(b.get("owner")),
         ("GET", "/ego/control"): lambda q, b: runtime.control(),
         ("GET", "/ego/alerts"): lambda q, b: runtime.alerts_view(),
+        ("GET", "/ego/dropped"): lambda q, b: {"dropped": runtime.dropped()},
         ("POST", "/ego/alert"): lambda q, b: report(b),
         ("POST", "/ego/alerts/ack"): lambda q, b: runtime.acknowledge(b.get("id")),
         ("GET", "/ego/view"): lambda q, b: runtime.view.status(),

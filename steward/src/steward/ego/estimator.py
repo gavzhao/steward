@@ -121,8 +121,8 @@ class EgoEstimator:
     def __post_init__(self) -> None:
         self.tracks: dict[str, Track] = {}
         self._ids = itertools.count(1)
-        self.dropped: collections.deque = collections.deque(maxlen=50)
-        """The most recent removals: ``{t, id, category, observations, reason, into?}``."""
+        self.dropped: collections.deque = collections.deque(maxlen=500)
+        """The most recent removals: ``{t, id, category, observations, reason, position, size, robot, into?}``."""
         self.version = 0
         self.stamp = 0.0
         self.odometry = {"x": 0.0, "y": 0.0, "yaw": 0.0, "sigma": {"pos": 0.01, "yaw": 0.01}}
@@ -296,7 +296,10 @@ class EgoEstimator:
                 continue
             holds_robot = _inside(track, base, -0.05) and track.bottom() < 1.0
             wall_tall = track.top() >= self.config.wall_like_top and track.footprint >= 0.5
-            hollow = track.voxels is not None and _concave(_points(track.voxels), track.pos, track.footprint, cam_p)
+            # A table (open beneath its top) or an open drawer can look hollow from some viewpoints;
+            # an object seen many times and identified with confidence is not a boxed room corner.
+            hollow = not _identified(track) and track.voxels is not None \
+                and _concave(_points(track.voxels), track.pos, track.footprint, cam_p)
             if holds_robot or wall_tall or hollow:
                 self._drop(track, "holds the robot's base" if holds_robot else
                            "as tall as a wall" if wall_tall else "hollow: its surfaces lie behind its centre")
@@ -411,6 +414,9 @@ class EgoEstimator:
         del self.tracks[track.id]
         self.dropped.append({"t": round(self.stamp, 2), "id": track.id, "category": track.category,
                              "observations": track.observations, "reason": reason,
+                             "position": [round(float(v), 3) for v in track.pos],
+                             "size": [round(float(v), 3) for v in track.size],
+                             "robot": [round(self.odometry["x"], 3), round(self.odometry["y"], 3)],
                              **({"into": into.id} if into is not None else {})})
 
     def _merge_same_surface(self, cam_p: np.ndarray) -> None:
@@ -959,6 +965,7 @@ def color_name(rgb: np.ndarray, invalid_frac: float = 0.0) -> str:
 
 VOXEL = 0.01
 ESTABLISHED_VIEWS = 5
+IDENTIFIED_SHARE = 0.6
 HELD_LARGER = 2.0  # a region with a footprint this many times the held object's is not the held object
 CONVEX_CHECK_M = 0.8  # boxes longer than this are checked for being filled rather than an outline
 MIN_FOOTPRINT_FILL = 0.2
@@ -999,6 +1006,15 @@ def _sigma_z(a: Track, b: Track) -> float:
 CONCAVE_MIN_M = 0.5
 SEE_THROUGH_DEG = 5.0
 SEE_THROUGH_M = 0.15
+
+
+def _identified(track: Track) -> bool:
+    """Seen at least :data:`ESTABLISHED_VIEWS` times and named: a category other than unknown holding
+    at least ``IDENTIFIED_SHARE`` of its accumulated category evidence."""
+    total = sum(track.category_counts.values())
+    category = track.category
+    return track.observations >= ESTABLISHED_VIEWS and category != "unknown" and total > 0 \
+        and track.category_counts[category] / total >= IDENTIFIED_SHARE
 
 
 def _concave(points: np.ndarray, centre: np.ndarray, footprint: float, cam_p: np.ndarray) -> bool:

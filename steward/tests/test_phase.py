@@ -348,5 +348,29 @@ def test_a_well_known_object_folded_into_a_newer_larger_track_keeps_its_id():
     est.tracks["e:90"].observations = 3
     est._merge_parts(np.array([-1.5, -1.2, 1.2]))
     assert list(est.tracks) == ["e:3"] and est.tracks["e:3"].observations == 43
-    assert est.dropped[-1] == {"t": 0.0, "id": "e:90", "category": "table", "observations": 3,
-                               "reason": "merged: part of a larger object", "into": "e:3"}
+    record = est.dropped[-1]
+    assert {k: record[k] for k in ("id", "observations", "reason", "into")} == \
+        {"id": "e:90", "observations": 3, "reason": "merged: part of a larger object", "into": "e:3"}
+
+
+def test_a_well_known_table_that_looks_hollow_from_afar_is_kept_while_an_unknown_box_is_not():
+    from steward.ego.estimator import EgoEstimator, _concave, _points
+
+    rng = np.random.default_rng(2)
+    # Only the far half of the top and the far legs: seen from (-1.4, -1.2) this reads as surfaces
+    # behind the box centre, as a room corner does.
+    top = np.stack([rng.uniform(0.6, 1.2, 300), rng.uniform(-0.9, -0.5, 300), np.full(300, 0.74)], axis=1)
+    legs = np.vstack([np.stack([np.full(40, 1.17), np.full(40, y), rng.uniform(0.0, 0.73, 40)], axis=1)
+                      for y in (-1.27, -0.53)])
+    voxels = np.unique(np.floor(np.vstack([top, legs]) / 0.01).astype(np.int32), axis=0)
+    cam = np.array([-1.4, -1.2, 1.5])
+    est = EgoEstimator(robot_model=steward_bot().to_dict())
+    est.odometry = {"x": -1.44, "y": -1.18, "yaw": 0.0}
+    table = _remembered("e:29", "table", [0.6, -0.9, 0.385], [1.19, 0.79, 0.74])
+    table.observations, table.voxels = 470, voxels
+    assert _concave(_points(voxels), table.pos, table.footprint, cam), "the case: it looks hollow from here"
+    unknown = _remembered("e:30", "unknown", [0.6, -0.9, 0.385], [1.19, 0.79, 0.74])
+    unknown.observations, unknown.voxels = 2, voxels.copy()
+    est.tracks = {"e:29": table, "e:30": unknown}
+    est._drop_impossible(cam)
+    assert list(est.tracks) == ["e:29"]

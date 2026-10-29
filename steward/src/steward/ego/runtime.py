@@ -308,8 +308,7 @@ class EgoRuntime:
             obj["role"], confidence = roles[obj["id"]]
             obj["roleConfidence"] = round(confidence, 3)
         job = self.executor.current.to_dict() if self.executor.current else None
-        with self._lock:
-            dropped = list(self.estimator.dropped)[-20:]
+        dropped = self.dropped()[-20:]
         return {
             "version": es.version,
             "t": round(es.stamp, 3),
@@ -322,6 +321,11 @@ class EgoRuntime:
             "perception": self.perception_mode,
             "runtimeError": self.last_error,
         }
+
+    def dropped(self) -> list[dict]:
+        """Every recent removal from the Ego-State, oldest first, with its reason."""
+        with self._lock:
+            return list(self.estimator.dropped)
 
     def _extent(self, track_id: str) -> list[float] | None:
         """Estimated physical size of a track, without the uncertainty margin added to ``sizeM``."""
