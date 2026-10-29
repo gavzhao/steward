@@ -154,3 +154,18 @@ def test_the_ego_view_draws_tracks_in_box_slots_and_recompiles_only_to_grow(kitc
     finally:
         view.close()
         sim.stop()
+
+
+def test_an_unconfigured_robot_view_is_waited_for_not_reported(kitchen_root, tmp_path):
+    host = StewardHost(kitchen_root, scenario="phase0-kitchen", run_dir=tmp_path).start()
+    runtime = EgoRuntime(RobotLink(host.robot_servers["w:robot-1"].url), steward_bot().to_dict())
+    api = ego_api(runtime).start()
+    runtime.view.start()
+    try:
+        host.attach_ego_api("w:robot-1", api.url)
+        status, _, _ = fetch(f"{host.wca.url}/console/frame?view=ego")
+        assert status == 204, "no camera yet anywhere: nothing to show, nothing wrong"
+    finally:
+        runtime.view.stop()
+        api.stop()
+        host.stop()

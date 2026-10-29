@@ -361,8 +361,11 @@ class StewardHost:
         try:
             status, body, headers = fetch(f"{url}/ego/view/frame" + (f"?after={int(after)}" if after else ""), timeout=2.0)
         except HttpError as exc:
-            if exc.status == 409 and self.view_settings is not None:
-                self._configure_robot_view(url)  # the robot restarted and lost its view settings
+            if exc.status == 409:
+                # The robot's view has no settings yet (it just started, or the console has not sent
+                # its camera yet): pass ours on if we have them; either way a frame follows shortly.
+                if self.view_settings is not None:
+                    self._configure_robot_view(url)
                 return NO_CONTENT
             raise
         except OSError as exc:
