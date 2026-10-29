@@ -396,3 +396,31 @@ def test_a_size_ordered_row_counts_from_either_end_of_the_table():
     assert check_table(scene([-0.3, 0.0, 0.3]), boxes)[0]
     assert check_table(scene([0.3, 0.0, -0.3]), boxes)[0], "smallest at the other end"
     assert not check_table(scene([0.0, -0.3, 0.3]), boxes)[0], "not in size order"
+
+
+def test_a_timed_out_request_fails_the_phase_instead_of_ending_the_loop(monkeypatch):
+    import steward.chores as chores_mod
+
+    failures: list[str] = []
+
+    class Stop(Exception):
+        pass
+
+    def timed_out(self):
+        raise TimeoutError("timed out")
+
+    def stop_after_failures(index, phase, message):
+        failures.append(message)
+        if len(failures) == 3:
+            raise Stop
+
+    monkeypatch.setattr(chores_mod, "_explore", lambda api, timeout_s: {"state": "succeeded"})
+    monkeypatch.setattr(chores_mod, "_wait_for_control", lambda api, on_wait=None: None)
+    monkeypatch.setattr(chores_mod.Chores, "publish", lambda self, **changes: None)
+    monkeypatch.setattr(chores_mod.Chores, "recover", lambda self, message="": None)
+    monkeypatch.setattr(chores_mod.Chores, "note_failure", lambda self, phase, message: None)
+    for name in ("arrange_on_table", "stack_on_sideboard", "swap_drawers"):
+        monkeypatch.setattr(chores_mod.Chores, name, timed_out)
+    with pytest.raises(Stop):
+        chores_mod.chores("http://unused", 0, on_failure=stop_after_failures)
+    assert failures == ["timed out"] * 3
