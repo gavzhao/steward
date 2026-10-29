@@ -152,10 +152,12 @@ class ViewLoop:
         return self.status()
 
     def latest(self, after: int | None = None) -> Frame | None:
-        """The newest frame if its tick is after ``after`` (``None`` otherwise); counts as viewing.
+        """The newest frame unless it is the one the viewer already has; counts as viewing. Ticks are
+        compared for identity, not order: a new rate (ticks are counted per frame period) or a
+        restarted renderer may give lower tick numbers than the viewer's last frame.
 
         :param after: the tick of the frame the viewer already has.
-        :returns: a newer frame or ``None``.
+        :returns: a frame the viewer does not have, or ``None``.
         """
         with self._lock:
             idle = time.monotonic() - self._last_view > self.idle_s
@@ -163,7 +165,7 @@ class ViewLoop:
             frame = self._frame
         if idle:
             self._wake.set()
-        return frame if frame is not None and (after is None or frame.index > after) else None
+        return frame if frame is not None and (after is None or frame.index != after) else None
 
     def status(self) -> dict:
         """Settings, measured frame rate over the last two seconds, last tick and render time."""

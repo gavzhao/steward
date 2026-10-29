@@ -169,3 +169,20 @@ def test_an_unconfigured_robot_view_is_waited_for_not_reported(kitchen_root, tmp
         runtime.view.stop()
         api.stop()
         host.stop()
+
+
+def test_a_viewer_holding_a_higher_tick_from_another_rate_still_gets_new_frames():
+    loop = ViewLoop("probe", lambda settings: (b"img", "image/jpeg", {}), idle_s=5.0).start()
+    try:
+        loop.configure(ViewSettings(CAMERA, 3, 64, 64))
+        deadline = time.monotonic() + 3.0
+        frame = None
+        while frame is None and time.monotonic() < deadline:
+            frame = loop.latest()
+            time.sleep(0.05)
+        stale_tick_at_10_fps = round(time.time() * 10)
+        assert frame is not None and frame.index < stale_tick_at_10_fps
+        assert loop.latest(after=stale_tick_at_10_fps) is frame, "the frame is new to this viewer"
+        assert loop.latest(after=frame.index) is None
+    finally:
+        loop.stop()

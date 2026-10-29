@@ -825,7 +825,11 @@ $('speed').onchange = async () => { try { await api('POST', '/wca/clock', { acti
 for (const id of ['showGtLabels', 'showEgoLabels', 'showSigma', 'showError']) $(id).onchange = drawOverlays;
 
 $('fps').value = String(fps);
-$('fps').onchange = () => { fps = Number($('fps').value); localStorage.setItem(FPS_KEY, String(fps)); postView(); };
+$('fps').onchange = () => {
+  fps = Number($('fps').value); localStorage.setItem(FPS_KEY, String(fps));
+  panes.world.index = panes.ego.index = null;  // tick numbers restart at a new rate
+  postView();
+};
 refresh().then(loadScenarios);
 paced(refresh, () => Math.min(fps, 5));
 ticked(() => pullFrame('world'));
