@@ -18,6 +18,15 @@ TEMPLATE_ID = "w:template"
 
 WOOD = [0.62, 0.45, 0.30, 1.0]
 LIGHT_WOOD = [0.80, 0.67, 0.50, 1.0]
+# Furniture of this kitchen in clearly different finishes, so that a robot seeing only part of a piece
+# can still tell the counter, sideboard, table and cabinet apart by colour.
+COUNTER_WHITE = [0.93, 0.93, 0.92, 1.0]
+COUNTER_TOP = [0.78, 0.79, 0.81, 1.0]
+WALNUT = [0.36, 0.22, 0.13, 1.0]
+WALNUT_DARK = [0.27, 0.16, 0.09, 1.0]
+BIRCH = [0.86, 0.75, 0.56, 1.0]
+BIRCH_LEG = [0.74, 0.62, 0.44, 1.0]
+CABINET_BLUE = [0.40, 0.52, 0.66, 1.0]
 WALL = [0.92, 0.91, 0.88, 1.0]
 FLOOR = [0.55, 0.52, 0.48, 1.0]
 STEEL = [0.70, 0.72, 0.75, 1.0]
@@ -77,8 +86,8 @@ def building(width: float = 6.0, depth: float = 5.0, height: float = 2.6, wall: 
 def counter(width: float = 1.8, depth: float = 0.6, height: float = 0.9) -> Entity:
     """Fixed kitchen counter without openable parts."""
     top = 0.04
-    carcass = primitive("box", [width, depth, height - top], pose([0, 0, (height - top) / 2]), WOOD)
-    slab = primitive("box", [width + 0.02, depth + 0.02, top], pose([0, 0, height - top / 2]), STEEL)
+    carcass = primitive("box", [width, depth, height - top], pose([0, 0, (height - top) / 2]), COUNTER_WHITE)
+    slab = primitive("box", [width + 0.02, depth + 0.02, top], pose([0, 0, height - top / 2]), COUNTER_TOP)
     link = Link(id="body", name="counter", geometry={"collision": [carcass, slab]},
                 affordances=[exact("support-surface")])
     return _entity("counter", "object", "fixed", [link])
@@ -94,9 +103,9 @@ def sideboard(width: float = 1.4, depth: float = 0.45, height: float = 0.85, dra
     plinth = 0.06
     if drawer_width <= 0:
         geoms = [
-            primitive("box", [depth - 0.04, width - 0.04, plinth], pose([0, 0, plinth / 2]), WOOD),
-            primitive("box", [depth, width, height - top - plinth], pose([0, 0, plinth + (height - top - plinth) / 2]), LIGHT_WOOD),
-            primitive("box", [depth + 0.02, width + 0.02, top], pose([0, 0, height - top / 2]), WOOD),
+            primitive("box", [depth - 0.04, width - 0.04, plinth], pose([0, 0, plinth / 2]), WALNUT_DARK),
+            primitive("box", [depth, width, height - top - plinth], pose([0, 0, plinth + (height - top - plinth) / 2]), WALNUT),
+            primitive("box", [depth + 0.02, width + 0.02, top], pose([0, 0, height - top / 2]), WALNUT_DARK),
         ]
         link = Link(id="body", name="sideboard", geometry={"collision": geoms}, affordances=[exact("support-surface")])
         return _entity("sideboard", "object", "fixed", [link])
@@ -104,12 +113,12 @@ def sideboard(width: float = 1.4, depth: float = 0.45, height: float = 0.85, dra
     lower_top = height - top - drawer_height
     side_w = (width - drawer_width) / 2
     geoms = [
-        primitive("box", [depth - 0.04, width - 0.04, plinth], pose([0, 0, plinth / 2]), WOOD),
-        primitive("box", [depth, width, lower_top - plinth], pose([0, 0, plinth + (lower_top - plinth) / 2]), LIGHT_WOOD),
-        primitive("box", [depth + 0.02, width + 0.02, top], pose([0, 0, height - top / 2]), WOOD),
-        primitive("box", [depth, side_w, drawer_height], pose([0, drawer_width / 2 + side_w / 2, lower_top + drawer_height / 2]), LIGHT_WOOD),
-        primitive("box", [depth, side_w, drawer_height], pose([0, -drawer_width / 2 - side_w / 2, lower_top + drawer_height / 2]), LIGHT_WOOD),
-        primitive("box", [wall, drawer_width, drawer_height], pose([-depth / 2 + wall / 2, 0, lower_top + drawer_height / 2]), LIGHT_WOOD),
+        primitive("box", [depth - 0.04, width - 0.04, plinth], pose([0, 0, plinth / 2]), WALNUT_DARK),
+        primitive("box", [depth, width, lower_top - plinth], pose([0, 0, plinth + (lower_top - plinth) / 2]), WALNUT),
+        primitive("box", [depth + 0.02, width + 0.02, top], pose([0, 0, height - top / 2]), WALNUT_DARK),
+        primitive("box", [depth, side_w, drawer_height], pose([0, drawer_width / 2 + side_w / 2, lower_top + drawer_height / 2]), WALNUT),
+        primitive("box", [depth, side_w, drawer_height], pose([0, -drawer_width / 2 - side_w / 2, lower_top + drawer_height / 2]), WALNUT),
+        primitive("box", [wall, drawer_width, drawer_height], pose([-depth / 2 + wall / 2, 0, lower_top + drawer_height / 2]), WALNUT),
     ]
     body = Link(id="body", name="sideboard", geometry={"collision": geoms}, affordances=[exact("support-surface")])
     drawer, slide = _drawer("body", depth, drawer_width, drawer_height, wall, lower_top)
@@ -144,12 +153,12 @@ def _drawer(parent: str, depth: float, opening_w: float, drawer_height: float, w
 def dining_table(width: float = 1.2, depth: float = 0.8, height: float = 0.75, mass: float = 25.0) -> Entity:
     """Free-standing table: heavy but movable."""
     top_t, leg = 0.04, 0.05
-    geoms = [primitive("box", [width, depth, top_t], pose([0, 0, height - top_t / 2]), LIGHT_WOOD)]
+    geoms = [primitive("box", [width, depth, top_t], pose([0, 0, height - top_t / 2]), BIRCH)]
     leg_h = height - top_t
     for sx in (-1, 1):
         for sy in (-1, 1):
             at = pose([sx * (width / 2 - leg), sy * (depth / 2 - leg), leg_h / 2])
-            geoms.append(primitive("box", [leg, leg, leg_h], at, WOOD))
+            geoms.append(primitive("box", [leg, leg, leg_h], at, BIRCH_LEG))
     link = Link(id="body", name="table", geometry={"collision": geoms}, inertial=exact({"mass": mass}),
                 material=exact({"friction": 0.8}), affordances=[exact("support-surface")])
     return _entity("table", "object", "free", [link])
@@ -161,11 +170,11 @@ def cabinet_with_drawer(width: float = 0.6, depth: float = 0.5, height: float = 
     wall = 0.02
     lower_h = height - drawer_height - wall
     carcass = [
-        primitive("box", [depth, width, lower_h], pose([0, 0, lower_h / 2]), WOOD),
-        primitive("box", [depth, width, wall], pose([0, 0, height - wall / 2]), WOOD),
-        primitive("box", [depth, wall, drawer_height], pose([0, width / 2 - wall / 2, lower_h + drawer_height / 2]), WOOD),
-        primitive("box", [depth, wall, drawer_height], pose([0, -width / 2 + wall / 2, lower_h + drawer_height / 2]), WOOD),
-        primitive("box", [wall, width, drawer_height], pose([-depth / 2 + wall / 2, 0, lower_h + drawer_height / 2]), WOOD),
+        primitive("box", [depth, width, lower_h], pose([0, 0, lower_h / 2]), CABINET_BLUE),
+        primitive("box", [depth, width, wall], pose([0, 0, height - wall / 2]), CABINET_BLUE),
+        primitive("box", [depth, wall, drawer_height], pose([0, width / 2 - wall / 2, lower_h + drawer_height / 2]), CABINET_BLUE),
+        primitive("box", [depth, wall, drawer_height], pose([0, -width / 2 + wall / 2, lower_h + drawer_height / 2]), CABINET_BLUE),
+        primitive("box", [wall, width, drawer_height], pose([-depth / 2 + wall / 2, 0, lower_h + drawer_height / 2]), CABINET_BLUE),
     ]
     base = Link(id="carcass", name="carcass", geometry={"collision": carcass}, affordances=[exact("support-surface")])
     drawer, slide = _drawer("carcass", depth, width, drawer_height, wall, lower_h)
