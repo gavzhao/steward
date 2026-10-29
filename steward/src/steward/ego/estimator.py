@@ -90,6 +90,9 @@ class EstimatorConfig:
     voxels_max: int = 6000
     points_per_cloud: int = 150
     missed_decay: float = 0.97
+    see_through_decay: float = 0.6
+    """Existence factor per view that saw through a track's place (beyond the whole box, at its centre
+    and just below its top): about six such views drop a track seen many times."""
     drop_below: float = 0.05
     max_range: float = 8.0
     wall_like_top: float = 1.25
@@ -285,25 +288,39 @@ class EgoEstimator:
     def _decay_unseen_rgbd(self, cam: dict, matched: set[str], frame: dict) -> None:
         """Lower the existence of tracks that should be in view but were not segmented: their centre
         projects into the image with a depth reading at about their distance (not occluded by
-        something nearer, not beyond the sensor)."""
+        something nearer, not beyond the sensor). When the depth readings at both the centre and
+        just below the top lie beyond the whole box, the camera saw through the place the object
+        was said to fill: it is gone, and its existence falls by ``see_through_decay`` instead."""
         depth = frame["depth"]
         h, w = depth.shape
         f = (h / 2.0) / math.tan(math.radians(frame["fovy"]) / 2.0)
         inv = pose_inverse(cam)
+
+        def reading(point: np.ndarray) -> tuple[float, float] | None:
+            x, y, z = pose_compose(inv, {"p": point.tolist(), "q": [1, 0, 0, 0]})["p"]
+            if x < 0.3 or x > self.config.max_range * 0.8:
+                return None
+            u, v = int(round((w - 1) / 2 - y * f / x)), int(round((h - 1) / 2 - z * f / x))
+            if not (0 <= u < w and 0 <= v < h):
+                return None
+            return x, float(depth[v, u])
+
         for tid in list(self.tracks):
             track = self.tracks[tid]
             if tid in matched or track.held or self._in_closed_drawer(track):
                 continue
-            x, y, z = pose_compose(inv, {"p": track.pos.tolist(), "q": [1, 0, 0, 0]})["p"]
-            if x < 0.3 or x > self.config.max_range * 0.8:
+            centre = reading(track.pos)
+            if centre is None:
                 continue
-            u, v = int(round((w - 1) / 2 - y * f / x)), int(round((h - 1) / 2 - z * f / x))
-            if not (0 <= u < w and 0 <= v < h):
-                continue
-            seen = float(depth[v, u])
+            x, seen = centre
             if seen <= 0.05 or seen < x - max(0.15, track.footprint / 2):
                 continue  # no reading, or something nearer hides it
-            track.existence *= self.config.missed_decay
+            # The top probe keeps a table (whose centre lies between its legs) or a chair from being
+            # seen through: the ray to just below the top meets the top surface.
+            top = reading(np.array([track.pos[0], track.pos[1], track.top() - 0.02]))
+            beyond = max(0.15, track.footprint)
+            see_through = top is not None and all(r > d + beyond for d, r in (centre, top))
+            track.existence *= self.config.see_through_decay if see_through else self.config.missed_decay
             if track.existence < self.config.drop_below:
                 del self.tracks[tid]
 

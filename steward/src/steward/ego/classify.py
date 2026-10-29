@@ -23,6 +23,7 @@ SHAPES: dict[str, dict] = {
     "sideboard": {"dims": (1.42, 0.49, 0.85), "floor": True, "color": "walnut"},
     "cabinet": {"dims": (0.62, 0.52, 0.80), "floor": True, "color": "bluegrey"},
     "chair": {"dims": (0.47, 0.46, 0.90), "floor": True, "color": "wood"},
+    "plant": {"dims": (0.26, 0.22, 0.40), "scale": (0.7, 2.5), "floor": True, "color": "green"},
     "drawer": {"dims": (0.56, 0.44, 0.22), "floor": False, "min_bottom": 0.35},
     "bowl": {"dims": (0.17, 0.17, 0.06), "scale": (0.65, 1.85), "floor": False},
     "cup": {"dims": (0.08, 0.08, 0.10), "floor": False},
@@ -65,6 +66,8 @@ def _color_score(rule: str | None, color: np.ndarray, invalid_frac: float) -> fl
         return 0.0 if (r > g > b and value > 0.6 and 0.2 < saturation < 0.5) else -3.0
     if rule == "bluegrey":
         return 0.0 if (b > r and b >= g and saturation > 0.15) else -3.0
+    if rule == "green":
+        return 0.0 if (g > r and g > b and saturation > 0.25) else -3.0
     if rule == "yellow":
         return 0.0 if (r > 0.45 and g > 0.35 and r >= g > b and saturation > 0.45) else -3.0
     if rule == "pink":

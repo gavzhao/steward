@@ -31,7 +31,8 @@ STALE_S = 5.0  # an ES object not seen for this long is remembered, not perceive
 # while the robot keeps seeing it (an object moved behind its back is stale memory, not a fault)
 ANOMALY_REPEATS = 3
 NAMES_ZH = {"wall": "墙", "table": "餐桌", "counter": "操作台", "cabinet": "柜子", "sideboard": "餐边柜", "chair": "椅子",
-            "bowl": "碗", "mug": "咖啡杯", "wine_glass": "高脚杯", "plate": "盘子", "drawer": "抽屉", "unknown": "未知物体"}
+            "bowl": "碗", "mug": "咖啡杯", "wine_glass": "高脚杯", "plate": "盘子", "drawer": "抽屉", "plant": "绿植",
+            "unknown": "未知物体"}
 
 
 class Observer:

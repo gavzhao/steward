@@ -274,3 +274,44 @@ def test_what_the_robot_holds_keeps_its_identity_while_carried():
     est._fuse_cloud(mug, {"seg": table_view, "centre": np.array([-1.4, 0.3, 0.6]), "size": np.array([1.2, 0.8, 0.3]),
                           "yaw": 0.0, "probs": {"table": 1.0}, "footprint": 1.2}, np.array([0.0, 0.0, 1.4]))
     assert mug.category == "mug" and "table" not in mug.category_counts
+
+
+def _remembered(oid: str, category: str, pos: list[float], size: list[float]):
+    from steward.ego.estimator import Track
+
+    return Track(id=oid, category_counts={category: 5.0}, pos=np.array(pos), var=np.full(3, 1e-4), yaw=0.0,
+                 yaw_var=1e-3, size=np.array(size), observations=20, first_seen=0.0, last_seen=0.0, existence=1.0)
+
+
+LOOKING_ALONG_X = {"p": [0.0, 0.0, 1.2], "q": [1.0, 0.0, 0.0, 0.0]}
+
+
+def test_a_remembered_object_whose_place_the_camera_sees_through_is_dropped_within_a_few_views():
+    from steward.ego.estimator import EgoEstimator
+
+    est = EgoEstimator(robot_model=steward_bot().to_dict())
+    est.tracks["e:5"] = _remembered("e:5", "plant", [2.0, 0.0, 0.2], [0.24, 0.2, 0.4])
+    frame = {"depth": np.full((240, 320), 4.0, np.float32), "fovy": 60.0}  # the far wall, nothing in front of it
+    for _ in range(8):
+        est._decay_unseen_rgbd(LOOKING_ALONG_X, set(), frame)
+    assert "e:5" not in est.tracks
+
+
+def test_furniture_seen_through_below_its_top_only_fades_slowly():
+    from steward.ego.estimator import EgoEstimator
+
+    est = EgoEstimator(robot_model=steward_bot().to_dict())
+    est.tracks["e:7"] = _remembered("e:7", "table", [2.0, 0.0, 0.375], [1.2, 0.8, 0.75])
+    depth = np.full((240, 320), 4.0, np.float32)  # the floor and wall between the legs
+    depth[150:180, :] = 2.0  # the tabletop, at the table's distance
+    frame = {"depth": depth, "fovy": 60.0}
+    for _ in range(8):
+        est._decay_unseen_rgbd(LOOKING_ALONG_X, set(), frame)
+    assert est.tracks["e:7"].existence == pytest.approx(est.config.missed_decay ** 8)
+
+
+def test_a_potted_plant_is_recognised_from_its_size_and_green_foliage():
+    measured = classify(np.array([0.22, 0.19, 0.40]), 0.01, np.array([0.305, 0.494, 0.231]))
+    assert max(measured, key=measured.get) == "plant", measured
+    big = classify(np.array([0.5, 0.45, 0.9]), 0.0, np.array([0.30, 0.50, 0.22]))
+    assert max(big, key=big.get) == "plant", f"a larger plant is still a plant: {big}"
