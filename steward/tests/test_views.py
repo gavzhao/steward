@@ -21,7 +21,8 @@ CAMERA = {"lookat": [0.0, 0.0, 0.5], "distance": 8.0, "azimuth": 90.0, "elevatio
 def test_frame_ticks_lie_on_the_shared_wall_clock():
     clock = FrameClock(now=lambda: 100.04)
     assert clock.next_tick(10) == (1001, pytest.approx(100.1))
-    assert clock.next_tick(10, after=1005) == (1006, pytest.approx(100.6))
+    assert clock.next_tick(10, after=1002) == (1003, pytest.approx(100.3)), "a tick just ahead is skipped past"
+    assert clock.next_tick(10, after=1005)[0] == 1001, "a far tick (another rate, a restart) is ignored"
     assert clock.next_tick(4)[0] == 401
 
 
@@ -184,5 +185,25 @@ def test_a_viewer_holding_a_higher_tick_from_another_rate_still_gets_new_frames(
         assert frame is not None and frame.index < stale_tick_at_10_fps
         assert loop.latest(after=stale_tick_at_10_fps) is frame, "the frame is new to this viewer"
         assert loop.latest(after=frame.index) is None
+    finally:
+        loop.stop()
+
+
+def test_a_tick_counted_at_another_rate_does_not_push_the_next_frame_into_the_future():
+    clock = FrameClock(now=lambda: 1000.0)
+    index, stamp = clock.next_tick(3, after=10_000 * 10)  # last frame counted at 10 fps
+    assert stamp == pytest.approx(1000.0 + 1 / 3, abs=1e-6) and index == 3001
+
+
+def test_a_view_survives_its_rate_changing_back_and_forth():
+    loop = ViewLoop("probe", lambda settings: (b"img", "image/jpeg", {}), idle_s=5.0).start()
+    try:
+        for fps in (10, 3, 10, 3):
+            loop.configure(ViewSettings(CAMERA, fps, 64, 64))
+            loop.latest()
+            time.sleep(0.4)
+        first = loop.latest()
+        time.sleep(0.8)
+        assert loop._thread.is_alive() and loop.latest(after=first.index) is not None
     finally:
         loop.stop()

@@ -93,7 +93,9 @@ class FrameClock:
         :returns: the tick number and its Unix time.
         """
         index = math.floor(self.now() * fps) + 1
-        if after is not None and index <= after:
+        # Skip past ``after`` only when it is a tick of this rate just ahead; a tick counted at another
+        # rate (or by a restarted clock) says nothing about when the next frame at this rate is due.
+        if after is not None and index <= after <= index + 2:
             index = after + 1
         return index, index / fps
 
@@ -180,6 +182,7 @@ class ViewLoop:
     def _run(self) -> None:
         try:
             last: int | None = None
+            last_fps: float | None = None
             while self._running:
                 with self._lock:
                     settings = self._settings
@@ -188,8 +191,10 @@ class ViewLoop:
                     self._wake.wait(0.2)
                     self._wake.clear()
                     continue
+                if settings.fps != last_fps:
+                    last, last_fps = None, settings.fps  # ticks are counted per frame period
                 index, stamp = self.clock.next_tick(settings.fps, last)
-                delay = stamp - self.clock.now()
+                delay = min(stamp - self.clock.now(), 1.0 / settings.fps)
                 if delay > 0 and self._wake.wait(delay):
                     self._wake.clear()
                     continue  # new settings or a stop request: take the next tick with them
