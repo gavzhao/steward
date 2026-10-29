@@ -308,6 +308,8 @@ class EgoRuntime:
             obj["role"], confidence = roles[obj["id"]]
             obj["roleConfidence"] = round(confidence, 3)
         job = self.executor.current.to_dict() if self.executor.current else None
+        with self._lock:
+            dropped = list(self.estimator.dropped)[-20:]
         return {
             "version": es.version,
             "t": round(es.stamp, 3),
@@ -315,6 +317,7 @@ class EgoRuntime:
                      "yawDeg": round(math.degrees(yaw_from_quat(p["q"])), 1),
                      "holding": held, "joints": {j.id: round(j.q.value[0], 3) for j in me.rigid.joints if j.q.value}},
             "objects": objects,
+            "dropped": dropped,
             "currentSkill": job,
             "perception": self.perception_mode,
             "runtimeError": self.last_error,

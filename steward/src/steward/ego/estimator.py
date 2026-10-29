@@ -53,6 +53,8 @@ class Track:
     mean_rgb: np.ndarray | None = None  # running mean colour of its regions (RGB-D mode)
     mean_invalid: float = 0.0  # running mean share of its pixels without depth
     bottom_seen: bool = False  # some view showed its base (not cut by the image edge or hidden)
+    absent_views: list[tuple[float, float, float, float]] = field(default_factory=list)
+    # (t, camera x, camera y, camera yaw) of views that saw through its place since it was last observed
     recent: collections.deque = field(default_factory=lambda: collections.deque(maxlen=RECENT_VIEWS))
     # (centre, size) of its latest single-view measurements, for the robust box of small objects
 
@@ -90,9 +92,20 @@ class EstimatorConfig:
     voxels_max: int = 6000
     points_per_cloud: int = 150
     missed_decay: float = 0.97
-    see_through_decay: float = 0.6
-    """Existence factor per view that saw through a track's place (beyond the whole box, at its centre
-    and just below its top): about six such views drop a track seen many times."""
+    """Existence factor per view for a young track (fewer than ESTABLISHED_VIEWS observations) that
+    should be in view but was not segmented."""
+    absence_free_share: float = 0.9
+    """Share of a track's depth probes that must lie beyond its box for a view to count as free space."""
+    absence_interval_s: float = 0.5
+    """Minimum world time between two counted free-space views of one track."""
+    absence_views: int = 3
+    """Free-space views that drop a young track."""
+    absence_views_established: int = 8
+    """Free-space views that drop an established track."""
+    absence_viewpoints: int = 2
+    """Clearly different camera poses among the free-space views that drop an established track."""
+    viewpoint_spread_m: float = 0.3
+    viewpoint_spread_deg: float = 20.0
     drop_below: float = 0.05
     max_range: float = 8.0
     wall_like_top: float = 1.25
@@ -108,6 +121,8 @@ class EgoEstimator:
     def __post_init__(self) -> None:
         self.tracks: dict[str, Track] = {}
         self._ids = itertools.count(1)
+        self.dropped: collections.deque = collections.deque(maxlen=50)
+        """The most recent removals: ``{t, id, category, observations, reason, into?}``."""
         self.version = 0
         self.stamp = 0.0
         self.odometry = {"x": 0.0, "y": 0.0, "yaw": 0.0, "sigma": {"pos": 0.01, "yaw": 0.01}}
@@ -283,18 +298,26 @@ class EgoEstimator:
             wall_tall = track.top() >= self.config.wall_like_top and track.footprint >= 0.5
             hollow = track.voxels is not None and _concave(_points(track.voxels), track.pos, track.footprint, cam_p)
             if holds_robot or wall_tall or hollow:
-                del self.tracks[track.id]
+                self._drop(track, "holds the robot's base" if holds_robot else
+                           "as tall as a wall" if wall_tall else "hollow: its surfaces lie behind its centre")
 
     def _decay_unseen_rgbd(self, cam: dict, matched: set[str], frame: dict) -> None:
-        """Lower the existence of tracks that should be in view but were not segmented: their centre
-        projects into the image with a depth reading at about their distance (not occluded by
-        something nearer, not beyond the sensor). When the depth readings at both the centre and
-        just below the top lie beyond the whole box, the camera saw through the place the object
-        was said to fill: it is gone, and its existence falls by ``see_through_decay`` instead."""
+        """Weigh the evidence against tracks that should be in view but were not segmented.
+
+        Only free space removes an established track: depth readings at its centre and at a 3×3
+        grid just below its top (:meth:`_probes`) that lie beyond the whole box show that the camera
+        saw through the place it was said to fill. Such a view counts once per
+        ``absence_interval_s``; the track is dropped after ``absence_views_established`` of them
+        from ``absence_viewpoints`` camera positions, and any new observation of it clears them. A
+        surface where the track should be (a table whose regions went to another track, a view
+        the segmentation missed) is no evidence of absence. Tracks seen fewer than
+        :data:`ESTABLISHED_VIEWS` times are often fragments or noise: they also fade by
+        ``missed_decay`` per view and need only ``absence_views`` free views."""
         depth = frame["depth"]
         h, w = depth.shape
         f = (h / 2.0) / math.tan(math.radians(frame["fovy"]) / 2.0)
         inv = pose_inverse(cam)
+        cam_yaw = yaw_from_quat(cam["q"])
 
         def reading(point: np.ndarray) -> tuple[float, float] | None:
             x, y, z = pose_compose(inv, {"p": point.tolist(), "q": [1, 0, 0, 0]})["p"]
@@ -312,17 +335,83 @@ class EgoEstimator:
             centre = reading(track.pos)
             if centre is None:
                 continue
-            x, seen = centre
-            if seen <= 0.05 or seen < x - max(0.15, track.footprint / 2):
-                continue  # no reading, or something nearer hides it
-            # The top probe keeps a table (whose centre lies between its legs) or a chair from being
-            # seen through: the ray to just below the top meets the top surface.
-            top = reading(np.array([track.pos[0], track.pos[1], track.top() - 0.02]))
-            beyond = max(0.15, track.footprint)
-            see_through = top is not None and all(r > d + beyond for d, r in (centre, top))
-            track.existence *= self.config.see_through_decay if see_through else self.config.missed_decay
-            if track.existence < self.config.drop_below:
-                del self.tracks[tid]
+            tol = max(0.10, track.footprint / 2)
+            free = filled = 0
+            for probe in self._probes(track):
+                r = reading(probe)
+                if r is None or r[1] <= 0.05:
+                    continue
+                d, seen = r
+                if seen > d + max(0.15, track.footprint / 2):
+                    free += 1
+                else:
+                    filled += 1  # a surface where the track should be, or something nearer hiding it
+            established = track.observations >= ESTABLISHED_VIEWS
+            young_in_view = not established and centre[1] > 0.05 and centre[1] >= centre[0] - tol
+            if young_in_view:
+                track.existence *= self.config.missed_decay
+            required = self.config.absence_views_established if established else self.config.absence_views
+            counted = free + filled
+            if counted >= 5 and free >= self.config.absence_free_share * counted:
+                self._note_absence(track, cam["p"], cam_yaw, required)
+            if not established and track.existence < self.config.drop_below:
+                self._drop(track, "faded: a young track not seen again where it should be visible")
+                continue
+            views = len(track.absent_views)
+            if views:
+                track.existence = min(track.existence, 1.0 - 0.5 * min(views, required) / required)
+            if views >= required and (not established or self._viewpoints(track) >= self.config.absence_viewpoints):
+                self._drop(track, f"seen through from {views} views")
+
+    @staticmethod
+    def _probes(track: Track) -> list[np.ndarray]:
+        """The centre and a 3×3 grid just below the top of a track's box: rays to an object that is
+        there meet it (a table's top hides the room between its legs); rays to a place it has left
+        pass on to what lies behind."""
+        c, s = math.cos(track.yaw), math.sin(track.yaw)
+        z = track.top() - 0.02
+        probes = [track.pos.copy()]
+        for fx in (-0.3, 0.0, 0.3):
+            for fy in (-0.3, 0.0, 0.3):
+                dx, dy = fx * track.size[0], fy * track.size[1]
+                probes.append(np.array([track.pos[0] + c * dx - s * dy, track.pos[1] + s * dx + c * dy, z]))
+        return probes
+
+    def _note_absence(self, track: Track, cam_p: list[float], cam_yaw: float, required: int) -> None:
+        """Count a free-space view of a track, at most once per ``absence_interval_s``; once
+        ``required`` views are in, only a view from a new camera pose adds to them."""
+        if track.absent_views and self.stamp - track.absent_views[-1][0] < self.config.absence_interval_s:
+            return
+        view = (self.stamp, float(cam_p[0]), float(cam_p[1]), cam_yaw)
+        if len(track.absent_views) >= required and not self._new_viewpoint(track.absent_views, view):
+            return
+        track.absent_views.append(view)
+
+    def _new_viewpoint(self, views: list[tuple[float, float, float, float]], view: tuple[float, float, float, float]) -> bool:
+        _, x, y, yaw = view
+        return all(math.hypot(x - a, y - b) >= self.config.viewpoint_spread_m
+                   or abs(wrap_angle(yaw - c)) >= math.radians(self.config.viewpoint_spread_deg)
+                   for _, a, b, c in views)
+
+    def _viewpoints(self, track: Track) -> int:
+        """Number of clearly different camera poses among a track's absence views."""
+        distinct: list[tuple[float, float, float, float]] = []
+        for view in track.absent_views:
+            if self._new_viewpoint(distinct, view):
+                distinct.append(view)
+        return len(distinct)
+
+    def _rename(self, track: Track, new_id: str) -> None:
+        del self.tracks[track.id]
+        track.id = new_id
+        self.tracks[new_id] = track
+
+    def _drop(self, track: Track, reason: str, into: Track | None = None) -> None:
+        """Remove a track and record why, for the operator and for diagnosis."""
+        del self.tracks[track.id]
+        self.dropped.append({"t": round(self.stamp, 2), "id": track.id, "category": track.category,
+                             "observations": track.observations, "reason": reason,
+                             **({"into": into.id} if into is not None else {})})
 
     def _merge_same_surface(self, cam_p: np.ndarray) -> None:
         """Merge tracks whose accumulated points lie on the same surfaces (duplicates from views
@@ -349,7 +438,7 @@ class EgoEstimator:
                     keep.color_counts[col] = keep.color_counts.get(col, 0.0) + n
                 keep.observations += drop.observations
                 keep.existence = max(keep.existence, drop.existence)
-                del self.tracks[drop.id]
+                self._drop(drop, "merged: same surfaces", into=keep)
                 self._rebuild_geometry(keep, cam_p, 2.0)
 
     def _merge_walls(self, cam_p: np.ndarray) -> None:
@@ -376,7 +465,7 @@ class EgoEstimator:
                     keep.category_counts[cat] = keep.category_counts.get(cat, 0.0) + n
                 keep.observations += drop.observations
                 keep.existence = max(keep.existence, drop.existence)
-                del self.tracks[drop.id]
+                self._drop(drop, "merged: one wall", into=keep)
                 self._rebuild_geometry(keep, cam_p, 2.0)
 
     @staticmethod
@@ -410,9 +499,14 @@ class EgoEstimator:
                     big.voxels = self._union(big.voxels, small.voxels)
                 for cat, n in small.category_counts.items():
                     big.category_counts[cat] = big.category_counts.get(cat, 0.0) + n
+                big_views = big.observations
                 big.observations += small.observations
                 big.existence = max(big.existence, small.existence)
-                del self.tracks[small.id]
+                self._drop(small, "merged: part of a larger object", into=big)
+                if small.observations > big_views:
+                    # The better-known object keeps its id; the newer track is the one that ends.
+                    self.dropped[-1].update(id=big.id, observations=big_views, into=small.id)
+                    self._rename(big, small.id)
                 if big.voxels is not None:
                     self._rebuild_geometry(big, cam_p, 2.0)
 
@@ -436,6 +530,7 @@ class EgoEstimator:
         track.observations += 1
         track.last_seen = self.stamp
         track.existence = min(1.0, track.existence + 0.2 * (1.0 - track.existence))
+        track.absent_views.clear()
         rgb = np.asarray(seg.color, float)
         n = track.observations
         track.mean_rgb = rgb if track.mean_rgb is None else track.mean_rgb + (rgb - track.mean_rgb) / n
@@ -627,7 +722,7 @@ class EgoEstimator:
                 keep.observations += drop.observations
                 keep.existence = max(keep.existence, drop.existence)
                 keep.last_seen = max(keep.last_seen, drop.last_seen)
-                del self.tracks[drop_id]
+                self._drop(drop, "merged: duplicate", into=keep)
 
     def _new_track(self, det: dict, pos: np.ndarray, yaw: float, sigma: float) -> Track:
         track = Track(
@@ -653,6 +748,7 @@ class EgoEstimator:
         track.observations += 1
         track.last_seen = self.stamp
         track.existence = min(1.0, track.existence + 0.2 * (1.0 - track.existence))
+        track.absent_views.clear()
         if track.held:
             return
         r = sigma**2
@@ -683,7 +779,7 @@ class EgoEstimator:
                 continue
             track.existence *= self.config.missed_decay
             if track.existence < self.config.drop_below:
-                del self.tracks[tid]
+                self._drop(track, "faded: not detected where it should be visible")
 
     def forget_objects(self) -> None:
         """Drop every perceived object except the one in the gripper (used when the kind of sensor

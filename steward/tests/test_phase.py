@@ -286,28 +286,49 @@ def _remembered(oid: str, category: str, pos: list[float], size: list[float]):
 LOOKING_ALONG_X = {"p": [0.0, 0.0, 1.2], "q": [1.0, 0.0, 0.0, 0.0]}
 
 
-def test_a_remembered_object_whose_place_the_camera_sees_through_is_dropped_within_a_few_views():
+def _views(est, cam: dict, frame: dict, seconds: float, dt: float = 0.1) -> None:
+    for _ in range(int(round(seconds / dt))):
+        est.stamp += dt
+        est._decay_unseen_rgbd(cam, set(), frame)
+
+
+def test_an_established_object_is_dropped_only_after_free_views_from_two_places():
     from steward.ego.estimator import EgoEstimator
 
     est = EgoEstimator(robot_model=steward_bot().to_dict())
     est.tracks["e:5"] = _remembered("e:5", "plant", [2.0, 0.0, 0.2], [0.24, 0.2, 0.4])
     frame = {"depth": np.full((240, 320), 4.0, np.float32), "fovy": 60.0}  # the far wall, nothing in front of it
-    for _ in range(8):
-        est._decay_unseen_rgbd(LOOKING_ALONG_X, set(), frame)
+    _views(est, LOOKING_ALONG_X, frame, 10.0)
+    assert "e:5" in est.tracks, "however long it looks from one place, one viewpoint does not delete a known object"
+    assert est.tracks["e:5"].existence >= 0.5
+    _views(est, {"p": [0.0, 0.5, 1.2], "q": [1.0, 0.0, 0.0, 0.0]}, frame, 0.6)
     assert "e:5" not in est.tracks
+    assert est.dropped[-1]["id"] == "e:5" and est.dropped[-1]["reason"].startswith("seen through")
 
 
-def test_furniture_seen_through_below_its_top_only_fades_slowly():
+def test_furniture_whose_top_is_still_in_view_gathers_no_evidence_of_absence():
     from steward.ego.estimator import EgoEstimator
 
     est = EgoEstimator(robot_model=steward_bot().to_dict())
     est.tracks["e:7"] = _remembered("e:7", "table", [2.0, 0.0, 0.375], [1.2, 0.8, 0.75])
     depth = np.full((240, 320), 4.0, np.float32)  # the floor and wall between the legs
-    depth[150:180, :] = 2.0  # the tabletop, at the table's distance
+    depth[140:195, :] = 2.0  # the tabletop, at the table's distance
     frame = {"depth": depth, "fovy": 60.0}
-    for _ in range(8):
-        est._decay_unseen_rgbd(LOOKING_ALONG_X, set(), frame)
-    assert est.tracks["e:7"].existence == pytest.approx(est.config.missed_decay ** 8)
+    for cam_y in (0.0, 0.5, -0.5):
+        _views(est, {"p": [0.0, cam_y, 1.2], "q": [1.0, 0.0, 0.0, 0.0]}, frame, 10.0)
+    table = est.tracks["e:7"]
+    assert table.existence == 1.0 and not table.absent_views, "regions that went elsewhere are no evidence it is gone"
+
+
+def test_a_young_fragment_where_a_surface_is_seen_fades_away():
+    from steward.ego.estimator import EgoEstimator
+
+    est = EgoEstimator(robot_model=steward_bot().to_dict())
+    est.tracks["e:9"] = _remembered("e:9", "unknown", [2.0, 0.0, 0.2], [0.24, 0.2, 0.4])
+    est.tracks["e:9"].observations = 2
+    frame = {"depth": np.full((240, 320), 2.0, np.float32), "fovy": 60.0}
+    _views(est, LOOKING_ALONG_X, frame, 12.0)
+    assert "e:9" not in est.tracks and est.dropped[-1]["reason"].startswith("faded")
 
 
 def test_a_potted_plant_is_recognised_from_its_size_and_green_foliage():
@@ -315,3 +336,17 @@ def test_a_potted_plant_is_recognised_from_its_size_and_green_foliage():
     assert max(measured, key=measured.get) == "plant", measured
     big = classify(np.array([0.5, 0.45, 0.9]), 0.0, np.array([0.30, 0.50, 0.22]))
     assert max(big, key=big.get) == "plant", f"a larger plant is still a plant: {big}"
+
+
+def test_a_well_known_object_folded_into_a_newer_larger_track_keeps_its_id():
+    from steward.ego.estimator import EgoEstimator
+
+    est = EgoEstimator(robot_model=steward_bot().to_dict())
+    est.tracks["e:3"] = _remembered("e:3", "table", [0.6, -0.9, 0.375], [1.2, 0.8, 0.75])
+    est.tracks["e:3"].observations = 40
+    est.tracks["e:90"] = _remembered("e:90", "table", [0.65, -0.9, 0.375], [1.4, 0.9, 0.75])
+    est.tracks["e:90"].observations = 3
+    est._merge_parts(np.array([-1.5, -1.2, 1.2]))
+    assert list(est.tracks) == ["e:3"] and est.tracks["e:3"].observations == 43
+    assert est.dropped[-1] == {"t": 0.0, "id": "e:90", "category": "table", "observations": 3,
+                               "reason": "merged: part of a larger object", "into": "e:3"}
