@@ -35,8 +35,10 @@ class SkillFailed(Exception):
 
 @dataclass
 class MotionConfig:
-    linear_speed: float = 0.35
-    angular_speed: float = 0.9
+    linear_speed: float = 1.4
+    angular_speed: float = 3.6
+    drawer_speed: float = 0.35
+    """Base speed while pulling or pushing a drawer by its handle: faster, its contents tip over."""
     position_tol: float = 0.03
     yaw_tol: float = 0.04
     joint_tol: float = 0.01
@@ -48,6 +50,14 @@ class MotionConfig:
     align_min: float = 0.01
     align_max: float = 0.15
     stall_s: float = 2.0
+    settle_s: float = 0.4
+    """Robot time after a joint command at which a joint still short of its target (sagging under
+    a load) gets one corrected setpoint."""
+    grasp_wait_s: float = 0.1
+    release_wait_s: float = 0.15
+    handle_release_wait_s: float = 0.08
+    look_dwell_s: float = 0.6
+    """Pause at each quarter turn of a look-around, so perception gathers views in every direction."""
 
 
 @dataclass
@@ -226,7 +236,7 @@ class SkillExecutor:
             if st["stamp"] > deadline:
                 raise SkillFailed(f"turn did not converge (yaw error {err:.2f} rad)")
 
-    def _translate_to(self, x1: float, y1: float, yaw: float) -> None:
+    def _translate_to(self, x1: float, y1: float, yaw: float, speed: float | None = None) -> None:
         st = self._state()
         x0, y0 = st["odometry"]["x"], st["odometry"]["y"]
         # The base yaw joint is continuous: express the heading in the same unwrapped frame as the
@@ -234,7 +244,7 @@ class SkillExecutor:
         current = st["odometry"]["yaw"]
         yaw = current + wrap_angle(yaw - current)
         length = math.hypot(x1 - x0, y1 - y0)
-        duration = length / self.config.linear_speed
+        duration = length / (speed or self.config.linear_speed)
         t0 = st["stamp"]
         deadline = t0 + duration * 3 + 5.0
         stall = _Stall(t0, self.config.stall_s, 0.01)
@@ -270,7 +280,7 @@ class SkillExecutor:
             q = st["joints"][name]
             if abs(q - target) < self.config.joint_tol:
                 return
-            settled = st["stamp"] - t0 > 1.5
+            settled = st["stamp"] - t0 > self.config.settle_s
             if settled and not corrected:
                 self._command({name: target + (target - q)})
                 corrected = True
@@ -335,7 +345,7 @@ class SkillExecutor:
         yaw0 = self._state()["odometry"]["yaw"]
         for k in range(1, 5):
             self._turn_to(wrap_angle(yaw0 + k * math.pi / 2))
-            self._wait(0.6)
+            self._wait(self.config.look_dwell_s)
             job.log.append(f"looked toward {math.degrees(wrap_angle(yaw0 + k * math.pi / 2)):.0f} deg")
 
     def _pick(self, job: Job, plan: dict) -> None:
@@ -352,7 +362,7 @@ class SkillExecutor:
             self._backoff(plan)
             raise SkillFailed(f"gripper is {miss * 100:.0f} cm from {plan['target']}; not closing")
         self._command({"gripper": "close"})
-        self._wait(0.4)
+        self._wait(self.config.grasp_wait_s)
         if not self._state()["gripper"]["holding"]:
             self._command({"gripper": "open"})
             self._set_joint("reach", self.config.retract_reach)
@@ -380,7 +390,7 @@ class SkillExecutor:
             self._backoff(plan)
             raise SkillFailed(f"gripper is not over {plan['support']}; keeping {plan['object']}")
         self._command({"gripper": "open"})
-        self._wait(0.6)
+        self._wait(self.config.release_wait_s)
         job.log.append(f"released {plan['object']} on {plan['support']}")
         self._set_joint("reach", self.config.retract_reach)
         self._set_joint("lift", max(plan["lift"], self.config.stow_lift))
@@ -400,7 +410,7 @@ class SkillExecutor:
             self._backoff(plan)
             raise SkillFailed(f"gripper is {miss * 100:.0f} cm from the handle of {plan['drawer']}; not closing")
         self._command({"gripper": "close"})
-        self._wait(0.4)
+        self._wait(self.config.grasp_wait_s)
         if not self._state()["gripper"].get("holdingHandle"):
             self._command({"gripper": "open"})
             self._set_joint("reach", self.config.retract_reach)
@@ -408,10 +418,10 @@ class SkillExecutor:
             raise SkillFailed(f"missed the handle of {plan['drawer']}")
         job.log.append(f"grasped the handle of {plan['drawer']}")
         start = self._state()["odometry"]
-        self._translate_to(plan["end"][0], plan["end"][1], plan["yaw"])
+        self._translate_to(plan["end"][0], plan["end"][1], plan["yaw"], self.config.drawer_speed)
         end = self._state()["odometry"]
         self._command({"gripper": "open"})
-        self._wait(0.3)
+        self._wait(self.config.handle_release_wait_s)
         moved = (end["x"] - start["x"]) * plan["axis"][0] + (end["y"] - start["y"]) * plan["axis"][1]
         if self._shift is not None:
             self._shift(plan["drawer"], [moved * plan["axis"][0], moved * plan["axis"][1], 0.0])
@@ -429,7 +439,7 @@ class SkillExecutor:
         self._dock(job, plan, retract=False)
         self._set_joint("lift", plan["lift"])
         self._command({"gripper": "open"})
-        self._wait(0.6)
+        self._wait(self.config.release_wait_s)
         job.log.append(f"released {plan['object']} on the floor at ({plan['floor'][0]:.2f}, {plan['floor'][1]:.2f})")
         self._backoff(plan)
         self._set_joint("lift", self.config.stow_lift)

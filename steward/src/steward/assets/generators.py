@@ -408,16 +408,16 @@ def steward_bot(camera_pitch_deg: float = 30.0, camera_fovy_deg: float = 60.0) -
         Joint(id="lift", parent="base", child="carriage", type=exact("prismatic"), origin=exact(pose([0.22, 0, 0])),
               axis=exact([0.0, 0.0, 1.0]), limits=exact({"lo": 0.30, "hi": 1.30}), q=exact([0.60]), qd=exact([0.0]),
               dynamics=exact({"damping": 250.0}),
-              actuator={"kind": "position", "limits": {"effort": 400.0, "velocity": 0.3}, "gains": {"kp": 6000.0}}),
+              actuator={"kind": "position", "limits": {"effort": 1600.0, "velocity": 1.2}, "gains": {"kp": 6000.0}}),
         Joint(id="reach", parent="carriage", child="arm", type=exact("prismatic"), origin=exact(pose([0.0, 0, 0])),
               axis=exact([1.0, 0.0, 0.0]), limits=exact({"lo": 0.05, "hi": 0.70}), q=exact([0.10]), qd=exact([0.0]),
               dynamics=exact({"damping": 150.0}),
-              actuator={"kind": "position", "limits": {"effort": 200.0, "velocity": 0.3}, "gains": {"kp": 2500.0}}),
+              actuator={"kind": "position", "limits": {"effort": 800.0, "velocity": 1.2}, "gains": {"kp": 2500.0}}),
         _fixed("gripper_mount", "arm", "gripper", pose([0.04, 0, 0])),
     ]
     root_actuator = {
         "kind": "position",
-        "limits": {"effort": [900.0, 900.0, 250.0], "velocity": [0.5, 0.5, 1.0]},
+        "limits": {"effort": [3600.0, 3600.0, 1000.0], "velocity": [2.0, 2.0, 4.0]},
         "gains": {"kp": [8000.0, 8000.0, 900.0], "damping": [1500.0, 1500.0, 130.0]},
     }
     return _entity("steward-bot", "robot", "planar", [base, head, carriage, arm, gripper], joints,

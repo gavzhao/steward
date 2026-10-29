@@ -63,7 +63,10 @@ def test_a_grasped_handle_slides_the_drawer_and_its_contents(chores_scene):
     assert sim.events[-1]["type"] == "grasp/handle"
     assert sim.sensors("w:robot-1")["gripper"]["holdingHandle"]
     bear_x = sim._entity_pose("w:teddy-bear")["p"][0]
-    _drive(sim, -1.85, 0.6, math.pi, 3)
+    for k in range(1, 31):  # pulled at the skills' drawer speed (0.3 m in about 0.9 s)
+        sim.command("w:robot-1", {"base": [-2.15 + 0.01 * k, 0.6, math.pi]})
+        sim.step_seconds(0.03)
+    sim.step_seconds(2)
     assert _drawer_q(sim, "w:sideboard-1") == pytest.approx(0.30, abs=0.02)
     assert sim._entity_pose("w:teddy-bear")["p"][0] - bear_x == pytest.approx(0.30, abs=0.03)
     sim.command("w:robot-1", {"gripper": "open"})
