@@ -56,15 +56,16 @@ def cmd_build_kitchen(args) -> int:
     return 0
 
 
-def _host(args, run_dir: Path):
+def _host(args, run_dir: Path, start: bool = True):
     from steward.world.server import StewardHost
 
     ports = {"w:robot-1": args.robot_port} if getattr(args, "robot_port", 0) else {}
-    return StewardHost(args.root, scenario=args.scenario, speed=args.speed, seed=args.seed, run_dir=run_dir,
+    host = StewardHost(args.root, scenario=args.scenario, speed=args.speed, seed=args.seed, run_dir=run_dir,
                        wca_port=args.wca_port, robot_ports=ports, chat=_chat_config(args),
                        phase=args.phase, bind_wait_s=getattr(args, "bind_wait", 0.0),
                        pause_on_perception_fault=getattr(args, "pause_on_perception_fault", False),
-                       freeze_idle=args.freeze_idle).start()
+                       freeze_idle=args.freeze_idle)
+    return host.start() if start else host
 
 
 def _chat_config(args):
@@ -163,7 +164,9 @@ class _EgoProcess:
 
 def cmd_up(args) -> int:
     run_dir = Path(args.root) / "runs" / time.strftime("%Y%m%d-%H%M%S")
-    host = _host(args, run_dir)
+    # The robot port serves from construction; the console's WCA opens only once the Ego API is
+    # attached, so the console never asks for an Ego-State view no robot provides yet.
+    host = _host(args, run_dir, start=False)
     robot_url = host.robot_servers["w:robot-1"].url
     try:
         ego = _EgoProcess(args, robot_url, run_dir / "ego")
@@ -173,6 +176,7 @@ def cmd_up(args) -> int:
     host.attach_ego_api("w:robot-1", ego.url)
     if host.chat.config is not None:
         host.chat.config.ego_api = ego.url
+    host.start()
     print(json.dumps({"console": f"{host.wca.url}/console", "wca": host.wca.url, "robot": robot_url, "egoApi": ego.url, "runDir": str(run_dir),
                       "task": host.scenario["task"]}, ensure_ascii=False), flush=True)
 
