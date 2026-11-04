@@ -226,7 +226,10 @@ export function egoTools(ego: EgoService): ToolDefinition[] {
         + 'why (too close below the view, beside or behind it, too far, hidden) and how to move. Use it to compare '
         + 'printed or patterned faces, read which side of a flat object is up, or tell similar objects apart. A '
         + 'printed flat object lying with its plain back up shows an almost uniform face: turn it over (place with '
-        + 'flip) and look again. Flat objects lying on or against each other hide parts of their faces and can be '
+        + 'flip) and look again. The result flags this for you: uniformFace is set when the seen face has almost no '
+        + 'colour variation (faceStdDev, luminance std out of 255) — for a printed flat object you are then almost '
+        + 'certainly looking at its plain back, so pick it up and place it with flip: true to see its printed face. '
+        + 'Flat objects lying on or against each other hide parts of their faces and can be '
         + 'perceived as one object, and one lying on another can hide it wholly: set them apart on free space first, '
         + 'looking again where each one lay after picking it up. The object frame stays fixed to the object between '
         + 'views and while it is carried, so one inspection before picking it tells which place yaw turns its face '
@@ -255,7 +258,8 @@ export function egoTools(ego: EgoService): ToolDefinition[] {
         + 'place yaw = H + turnDeg. score is a correlation (1 = identical); a best score barely above the second is '
         + 'ambiguous, so look closer and match again. offsetM is good to about one cell (cellM): when you know the '
         + 'layout (for example a grid of equal pieces), snap it to the nearest slot. spread near 0 (under about 10) '
-        + 'means a plain face: the object probably lies with its back up. An entry with error says what to look at.',
+        + 'means a plain face: the object probably lies with its back up — inspect it (ego_inspect flags uniformFace) '
+        + 'and place it with flip: true to turn the printed face up, then match again. An entry with error says what to look at.',
       parameters: {
         entities: { type: 'array', items: { type: 'string' }, required: true, description: 'Ids of the objects whose faces are sought.' },
         reference: { type: 'string', required: true, description: 'Id of the object showing the whole picture.' },

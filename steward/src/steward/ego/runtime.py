@@ -226,6 +226,20 @@ MATCH_MIN_COVERAGE = 0.5  # share of a face that must have been seen to match it
 ACTIVITY_MAX = 300
 PLAN_STEP_STATES = frozenset({"pending", "active", "done", "failed", "skipped"})
 VIEW_HINT_COVERAGE = 0.95  # a face seen less than this gets a hint saying why
+UNIFORM_FACE_STD = 4.0  # top-face luminance std (0-255) below which the face is nearly uniform
+UNIFORM_FACE_COVERAGE = 0.9  # a face seen less than this says nothing about uniformity
+
+
+def face_lum_std(rows: list) -> float:
+    """Luminance standard deviation (0-255) over the seen cells of an :func:`inspect` face grid;
+    0.0 when fewer than 8 cells are seen. A printed board showing its plain cardboard back has
+    almost none; a printed picture has clear variation."""
+    cells = [c for row in rows for c in row if c is not None]
+    if len(cells) < 8:
+        return 0.0
+    lum = [0.299 * c[0] + 0.587 * c[1] + 0.114 * c[2] for c in cells]
+    mean = sum(lum) / len(lum)
+    return (sum((v - mean) ** 2 for v in lum) / len(lum)) ** 0.5
 
 
 def view_hint(cam: dict, intrinsics: dict, centre: np.ndarray, top: float, range_m: float) -> str:
@@ -884,7 +898,10 @@ class EgoRuntime:
 
         :param entity: Ego-State object id.
         :param px: grid size, 4 to 64.
-        :returns: ``{entity, px, yawDeg, sizeM, coverage, rows, worldRows, worldTurnDeg, stamp}``, and
+        :returns: ``{entity, px, yawDeg, sizeM, coverage, rows, worldRows, worldTurnDeg, stamp}``,
+            ``faceStdDev`` (luminance std of the seen cells, 0-255; ``uniformFace`` is set when it
+            is below :data:`UNIFORM_FACE_STD` and the face is well seen — for a printed flat
+            object that means you are looking at its plain back), and
             ``hint`` (:func:`view_hint`) when less than :data:`VIEW_HINT_COVERAGE` of the face is seen.
         :raises KeyError: unknown object; :raises ValueError: ``px`` out of range."""
         if not 4 <= px <= 64:
@@ -908,7 +925,10 @@ class EgoRuntime:
         coverage, rows, frame = best
         world_rows, turn = world_up_face(rows, yaw)
         hint = {} if coverage >= VIEW_HINT_COVERAGE else {"hint": self._view_hint(frame["header"]["odometry"], centre, top)}
+        std = face_lum_std(rows)
+        uniform = {"uniformFace": True} if std < UNIFORM_FACE_STD and coverage >= UNIFORM_FACE_COVERAGE else {}
         return {"entity": entity, "px": px, "camera": frame["camera"], "yawDeg": round(math.degrees(yaw), 2),
+                "faceStdDev": round(std, 1), **uniform,
                 "sizeM": [round(float(v), 3) for v in size], "coverage": round(coverage, 3), **hint,
                 "rows": rows, "worldRows": world_rows, "worldTurnDeg": turn, "stamp": frame["header"]["stamp"]}
 

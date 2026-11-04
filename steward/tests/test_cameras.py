@@ -215,3 +215,18 @@ def test_at_the_table_edge_the_wide_camera_reads_the_face_the_head_camera_cannot
     finally:
         runtime.stop()
         host.stop()
+
+
+def test_face_lum_std_separates_a_plain_back_from_a_printed_face():
+    """A printed board's cardboard back is nearly uniform; a picture face varies. Fewer than 8
+    seen cells says nothing (0.0)."""
+    from steward.ego.runtime import UNIFORM_FACE_STD, face_lum_std
+
+    back = [[[180, 170, 155]] * 4 for _ in range(4)]
+    printed = [[[255, 255, 255] if (r + c) % 2 == 0 else [0, 0, 0] for c in range(4)]
+               for r in range(4)]
+    assert face_lum_std(back) < UNIFORM_FACE_STD
+    assert face_lum_std(printed) > UNIFORM_FACE_STD
+    assert face_lum_std([[None] * 4 for _ in range(4)]) == 0.0
+    holed = [[cell if i % 2 else None for i, cell in enumerate(row)] for row in printed]
+    assert face_lum_std(holed) > UNIFORM_FACE_STD
