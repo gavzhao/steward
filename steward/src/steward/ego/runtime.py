@@ -226,7 +226,10 @@ MATCH_MIN_COVERAGE = 0.5  # share of a face that must have been seen to match it
 ACTIVITY_MAX = 300
 PLAN_STEP_STATES = frozenset({"pending", "active", "done", "failed", "skipped"})
 VIEW_HINT_COVERAGE = 0.95  # a face seen less than this gets a hint saying why
-UNIFORM_FACE_STD = 4.0  # top-face luminance std (0-255) below which the face is nearly uniform
+# Face bands calibrated on the puzzle-dog run of 2026-11-04 (r3): measured cardboard backs
+# 0.1-9.1, printed faces 14.3-74.3. Between the bands either reading is possible.
+UNIFORM_FACE_STD = 10.0  # top-face luminance std (0-255) below which the face is nearly uniform
+UNIFORM_FACE_AMBIGUOUS_STD = 14.0  # up to this, a face above UNIFORM_FACE_STD is still ambiguous
 UNIFORM_FACE_COVERAGE = 0.9  # a face seen less than this says nothing about uniformity
 
 
@@ -901,7 +904,9 @@ class EgoRuntime:
         :returns: ``{entity, px, yawDeg, sizeM, coverage, rows, worldRows, worldTurnDeg, stamp}``,
             ``faceStdDev`` (luminance std of the seen cells, 0-255; ``uniformFace`` is set when it
             is below :data:`UNIFORM_FACE_STD` and the face is well seen — for a printed flat
-            object that means you are looking at its plain back), and
+            object that means you are looking at its plain back; ``ambiguousFace`` is set between
+            :data:`UNIFORM_FACE_STD` and :data:`UNIFORM_FACE_AMBIGUOUS_STD` — a washed-out print
+            or a lit back, look again from another dock before trusting it), and
             ``hint`` (:func:`view_hint`) when less than :data:`VIEW_HINT_COVERAGE` of the face is seen.
         :raises KeyError: unknown object; :raises ValueError: ``px`` out of range."""
         if not 4 <= px <= 64:
@@ -926,7 +931,13 @@ class EgoRuntime:
         world_rows, turn = world_up_face(rows, yaw)
         hint = {} if coverage >= VIEW_HINT_COVERAGE else {"hint": self._view_hint(frame["header"]["odometry"], centre, top)}
         std = face_lum_std(rows)
-        uniform = {"uniformFace": True} if std < UNIFORM_FACE_STD and coverage >= UNIFORM_FACE_COVERAGE else {}
+        seen_well = coverage >= UNIFORM_FACE_COVERAGE
+        uniform = {}
+        if seen_well:
+            if std < UNIFORM_FACE_STD:
+                uniform = {"uniformFace": True}
+            elif std < UNIFORM_FACE_AMBIGUOUS_STD:
+                uniform = {"ambiguousFace": True}
         return {"entity": entity, "px": px, "camera": frame["camera"], "yawDeg": round(math.degrees(yaw), 2),
                 "faceStdDev": round(std, 1), **uniform,
                 "sizeM": [round(float(v), 3) for v in size], "coverage": round(coverage, 3), **hint,
@@ -1096,6 +1107,10 @@ class EgoRuntime:
         with self._lock:
             self.receipts[receipt["id"]] = receipt
         return receipt
+
+    def _drawer_front(self, entity_id: str) -> dict:
+        """The current room-facing footprint of one entity, for re-anchoring a flipped drawer plan."""
+        return self.esim.drawer_front(self.ego_state(), entity_id)
 
     def annotate(self, request: dict) -> dict:
         """Name an Ego-State object as the robot's agent identified it (``label``, ``affordances``).
