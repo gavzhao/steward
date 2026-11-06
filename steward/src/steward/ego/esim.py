@@ -178,10 +178,67 @@ class Esim:
         boxes = [entity_box(e)[0] for e in es.entities if e.id != es.self_id]
         return front_box(entity_box(ent)[0], room_centre(boxes))
 
+    def drawer_front(self, es: SceneState, entity_id: str) -> dict:
+        """The entity's current room-facing footprint and height range, so a flipped drawer plan can
+        re-anchor its handle on what perception has seen from that side."""
+        drawer = es.find(entity_id)
+        box = self._front(es, drawer)
+        _, bottom, top = entity_box(drawer)
+        return {"cx": box.cx, "cy": box.cy, "yaw": box.yaw, "hx": box.hx, "bottom": bottom, "top": top}
+
+    def _flip_plan(self, drawer: Entity, box: Box2D, hx: float, n: tuple[float, float], standoff: float,
+                   distance: float, sign: float, dock: tuple[float, float], obstacles: set) -> dict | None:
+        """The mirror plan for the drawer's opposite face, with a collision-free path from the
+        primary dock, or ``None`` when the other side is blocked or unreachable. The mirrored
+        handle coordinates come from the same footprint belief as the primary plan; the executor
+        re-anchors them on perception once it has docked there."""
+        cfg = self.config
+        n2 = (-n[0], -n[1])
+        _, bottom, top = entity_box(drawer)
+        handle2 = [box.cx + n2[0] * (hx - 0.015), box.cy + n2[1] * (hx - 0.015), (bottom + top) / 2]
+        dock2 = (handle2[0] + n2[0] * standoff, handle2[1] + n2[1] * standoff)
+        end2 = (dock2[0] + sign * n2[0] * distance, dock2[1] + sign * n2[1] * distance)
+        predock2 = (dock2[0] + n2[0] * cfg.predock_backoff, dock2[1] + n2[1] * cfg.predock_backoff)
+        yaw2 = math.atan2(-n2[1], -n2[0])
+        if self._footprint_blocked(obstacles, dock2, yaw2) or self._footprint_blocked(obstacles, end2, yaw2) \
+                or self._turn_blocked(obstacles, predock2):
+            return None
+        flip_path = astar(build_grid(obstacles, self.radius + cfg.nav_margin, [dock, predock2]), dock, predock2)
+        if flip_path is None:
+            return None
+        return {"path": [list(q) for q in flip_path], "predock": list(predock2), "dock": list(dock2), "yaw": yaw2,
+                "end": list(end2), "handle": handle2, "distance": distance, "direction": sign,
+                "axis": list(n2), "drawer": drawer.id, "captureRadius": cfg.capture_radius}
+
     def _opening(self, es: SceneState, drawer: Entity) -> float:
         furniture = [entity_box(e)[0] for e in es.entities
                      if e.id not in (drawer.id, es.self_id) and self._affords(e, "support-surface")]
         return protrusion(self._front(es, drawer), furniture)
+
+    def _front_extent(self, es: SceneState, drawer: Entity, box: Box2D, n: tuple[float, float]) -> float:
+        """The drawer's half-extent along its front normal, clamped by the furniture it sits in: the
+        RGB-D fit can run past the front into the room (observed +12-15 cm per axis on a drawer the
+        size of half a metre), and a handle point derived from an over-extended footprint lands
+        outside capture range. A drawer pulled out by ``opening`` legitimately extends past the
+        flush position by that much."""
+        cap = min(box.hx, self._front_extent_clamped(es, drawer, box, n) + self._opening(es, drawer))
+        return max(cap, 0.05)
+
+    def _front_extent_clamped(self, es: SceneState, drawer: Entity, box: Box2D,
+                              n: tuple[float, float]) -> float:
+        """The flush-position half-extent: the furniture face along the front normal, measured from
+        the drawer centre, plus a handle's width."""
+        cap = box.hx
+        furniture = [entity_box(e)[0] for e in es.entities
+                     if e.id not in (drawer.id, es.self_id) and self._affords(e, "support-surface")]
+        for f in furniture:
+            if self._edge_distance(f, (box.cx, box.cy)) < 0:
+                continue
+            dyaw = box.yaw - f.yaw
+            reach = abs(f.hx * math.cos(dyaw)) + abs(f.hy * math.sin(dyaw))
+            d = (box.cx - f.cx) * n[0] + (box.cy - f.cy) * n[1]
+            cap = min(cap, reach - d + 0.02)
+        return cap
 
     def _support_of(self, es: SceneState, ent: Entity) -> Entity | None:
         for rel in es.relations:
@@ -860,7 +917,8 @@ class Esim:
         _, bottom, top = entity_box(drawer)
         box = self._front(es, drawer)
         n = (math.cos(box.yaw), math.sin(box.yaw))
-        handle = [box.cx + n[0] * (box.hx - 0.015), box.cy + n[1] * (box.hx - 0.015), (bottom + top) / 2]
+        hx = self._front_extent(es, drawer, box, n)
+        handle = [box.cx + n[0] * (hx - 0.015), box.cy + n[1] * (hx - 0.015), (bottom + top) / 2]
         opening = self._opening(es, drawer)
         if skill == "open":
             if opening > 0.2:
@@ -897,9 +955,15 @@ class Esim:
         r = cfg.capture_radius
         p_miss = math.exp(-(r * r) / (2 * sigma * sigma)) if sigma > 0 else 0.0
         issues = [f"handle position uncertainty {sigma * 100:.1f} cm gives {p_miss:.0%} miss probability"] if p_miss > 0.05 else []
+        if hx < box.hx - 0.02:
+            issues.append(f"footprint over-extends past its cabinet by {(box.hx - hx) * 100:.0f} cm; "
+                          f"handle clamped to the flush position")
         plan = {"path": [list(q) for q in path], "predock": list(predock), "dock": list(dock), "yaw": yaw,
                 "end": list(end), "viewing": list(clear), "handle": handle, "distance": distance, "direction": sign,
                 "axis": list(n), "drawer": drawer.id, "captureRadius": r, "pathLength": path_length(path)}
+        flip = self._flip_plan(drawer, box, hx, n, standoff, distance, sign, dock, obstacles)
+        if flip is not None:
+            plan["flip"] = flip
         return self._receipt(es, skill, params, max(0.03, p_miss), issues, plan)
 
     @staticmethod

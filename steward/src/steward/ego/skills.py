@@ -72,6 +72,9 @@ class MotionConfig:
     grasp_wait_s: float = 0.1
     release_wait_s: float = 0.15
     handle_release_wait_s: float = 0.08
+    flip_observe_s: float = 1.5
+    """Robot time at a flipped dock for perception to gather the drawer's true face before the
+    grasp is re-anchored on it."""
     look_dwell_s: float = 0.6
     wrist_turn_s: float = 0.6
     """Robot time to turn the wrist yaw to a placing heading."""
@@ -125,9 +128,11 @@ class SkillExecutor:
                  on_error: Callable[[str], None] | None = None, on_finish: Callable[[Job], None] | None = None,
                  on_begin: Callable[[str, dict], None] | None = None,
                  on_release: Callable[[str, list[float]], None] | None = None,
-                 clock: RobotLink | None = None):
+                 clock: RobotLink | None = None, drawer_front: Callable[[str], dict] | None = None):
         """``clock`` is the robot link whose world clock times the control ticks (one hold per job,
-        ``skill/<job id>``); without it a tick sleeps ``tick_s`` of wall time."""
+        ``skill/<job id>``); without it a tick sleeps ``tick_s`` of wall time. ``drawer_front``
+        returns an entity's current room-facing footprint, so a missed drawer grasp can be
+        re-anchored on the opposite face."""
         self._on_error = on_error
         self._clock = clock
         self._now = 0.0
@@ -139,6 +144,7 @@ class SkillExecutor:
         self._state = state
         self._mark_held = mark_held
         self._shift = shift
+        self._drawer_front = drawer_front
         self.config = config or MotionConfig()
         self._ids = itertools.count(1)
         self._gentle = False  # the running plan moves a container with its contents
@@ -582,22 +588,23 @@ class SkillExecutor:
     def _drawer(self, job: Job, plan: dict) -> None:
         """Grasp a drawer handle, move the base along the drawer axis to slide it, release and back away."""
         self._dock(job, plan)
-        handle = plan["handle"]
-        self._align_lateral(handle[:2])
-        self._set_joint("lift", handle[2])
-        self._set_joint("reach", max(0.05, self._reach_to(handle[:2])))
-        miss = float(np.linalg.norm(self._gripper_xy() - np.array(handle[:2])))
-        if miss > plan.get("captureRadius", 0.05):
-            self._set_joint("reach", self.config.retract_reach)
-            self._backoff(plan)
-            raise SkillFailed(f"gripper is {miss * 100:.0f} cm from the handle of {plan['drawer']}; not closing")
-        self._command({"gripper": "close"})
-        self._wait(self.config.grasp_wait_s)
-        if not self._state()["gripper"].get("holdingHandle"):
+        ok, detail = self._grasp_handle(job, plan)
+        if not ok and plan.get("flip"):
+            # The planned face is the room-facing prior, not an observation; a grasp miss is
+            # evidence it picked the closed side. Try the opposite face once: dock there, let
+            # perception see the true front, re-anchor the handle on it and grasp again.
+            self._command({"gripper": "open"})
+            plan = plan["flip"]
+            job.log.append("flipped to the opposite face of the drawer")
+            self._dock(job, plan)
+            self._wait(self.config.flip_observe_s)
+            self._reanchor_handle(plan, self._drawer_front(plan["drawer"]))
+            ok, detail = self._grasp_handle(job, plan)
+        if not ok:
             self._command({"gripper": "open"})
             self._set_joint("reach", self.config.retract_reach)
             self._backoff(plan)
-            raise SkillFailed(f"missed the handle of {plan['drawer']}")
+            raise SkillFailed(detail)
         job.log.append(f"grasped the handle of {plan['drawer']}")
         start = self._state()["odometry"]
         self._translate_to(plan["end"][0], plan["end"][1], plan["yaw"], self.config.drawer_speed)
@@ -613,6 +620,36 @@ class SkillExecutor:
         self._translate_to(plan["viewing"][0], plan["viewing"][1], plan["yaw"])
         self._set_joint("lift", self.config.stow_lift)
         job.message = f"{verb} {plan['drawer']}"
+
+    def _grasp_handle(self, job: Job, plan: dict) -> tuple[bool, str]:
+        """Approach the planned handle point and close on it: ``False`` with the reason when the
+        proximity check fails or the physics does not register a held handle."""
+        handle = plan["handle"]
+        self._align_lateral(handle[:2])
+        self._set_joint("lift", handle[2])
+        self._set_joint("reach", max(0.05, self._reach_to(handle[:2])))
+        miss = float(np.linalg.norm(self._gripper_xy() - np.array(handle[:2])))
+        if miss > plan.get("captureRadius", 0.05):
+            self._set_joint("reach", self.config.retract_reach)
+            return False, f"gripper is {miss * 100:.0f} cm from the handle of {plan['drawer']}; not closing"
+        self._command({"gripper": "close"})
+        self._wait(self.config.grasp_wait_s)
+        if not self._state()["gripper"].get("holdingHandle"):
+            return False, f"missed the handle of {plan['drawer']}"
+        return True, ""
+
+    def _reanchor_handle(self, plan: dict, box: dict) -> None:
+        """Re-aim a flipped drawer plan at the face perception has now seen: the refreshed
+        footprint replaces the stale one the mirror was built from. The flipped face points away
+        from the room, i.e. opposite the room-facing footprint's +x."""
+        n = (-math.cos(box["yaw"]), -math.sin(box["yaw"]))
+        handle = [box["cx"] + n[0] * (box["hx"] - 0.015), box["cy"] + n[1] * (box["hx"] - 0.015),
+                  (box["bottom"] + box["top"]) / 2]
+        standoff = math.hypot(plan["dock"][0] - plan["handle"][0], plan["dock"][1] - plan["handle"][1])
+        plan["handle"] = handle
+        plan["dock"] = [handle[0] + n[0] * standoff, handle[1] + n[1] * standoff]
+        plan["end"] = [plan["dock"][0] + plan["direction"] * n[0] * plan["distance"],
+                       plan["dock"][1] + plan["direction"] * n[1] * plan["distance"]]
 
     def _place_floor(self, job: Job, plan: dict) -> None:
         """Drive in with the held object, lower it to just above the floor, release and back away.
